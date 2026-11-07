@@ -30,7 +30,7 @@ class CameraFrameDiagnosticsTest {
 
     @Test fun packsCropWithRowAndPixelStride() {
         val src = ByteBuffer.wrap(byteArrayOf(
-            0,10,99,20,99,30,99,88, 0,40,99,50,99,60,99,88, 0,70,99,80,99,90,99,88
+            99,99,10,99,20,99,30,88, 99,99,40,99,50,99,60,88, 99,99,70,99,80,99,90,88
         ))
         val p = LumaFramePacker.pack(src, 3, 3, 8, 2, 1, 0, 3, 3)
         assertEquals(2, p.width); assertEquals(3, p.height)
