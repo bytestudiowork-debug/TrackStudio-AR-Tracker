@@ -7,7 +7,7 @@ EXPECTED_BASALT="0f3b2b52c807f70ff4e2973ce253c73329eea7bc"
 EXPECTED_VCPKG="1e199d32ad53aab1defda61ce41c380302e3f95c"
 
 test -f "$ROOT/.gitmodules"
-test -d "$BASALT_DIR/.git"
+git -C "$BASALT_DIR" rev-parse --is-inside-work-tree >/dev/null
 test "$(git -C "$BASALT_DIR" rev-parse HEAD)" = "$EXPECTED_BASALT"
 
 if [[ -n "$(git -C "$BASALT_DIR" status --porcelain --untracked-files=all)" ]]; then
