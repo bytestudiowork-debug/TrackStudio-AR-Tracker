@@ -1,4 +1,5 @@
 name: Release APK
+# CI also validates OpenCV dependency and native-library packaging.
 
 on:
   workflow_dispatch:
