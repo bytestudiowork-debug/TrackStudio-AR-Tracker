@@ -56,6 +56,16 @@ jobs:
           git -C "$VCPKG_ROOT" fetch --unshallow origin master
           git -C "$VCPKG_ROOT" cat-file -e 05442024c3fda64320bd25d2251cc9807b84fb6f^{commit}
 
+      - name: Disable incompatible KleidiCV in the external OpenCV port
+        run: |
+          set -euo pipefail
+          PORTFILE="$VCPKG_ROOT/ports/opencv4/portfile.cmake"
+          grep -q -- '-DWITH_CPUFEATURES=${WITH_CPUFEATURES}' "$PORTFILE"
+          if ! grep -q -- '-DWITH_KLEIDICV=OFF' "$PORTFILE"; then
+            sed -i '/-DWITH_CPUFEATURES=${WITH_CPUFEATURES}/a\        -DWITH_KLEIDICV=OFF # Android NDK 27 compatibility: use OpenCV's standard NEON kernels' "$PORTFILE"
+          fi
+          grep -n -- '-DWITH_KLEIDICV=OFF' "$PORTFILE"
+
       - name: Install Android arm64 Basalt dependencies
         run: |
           "$VCPKG_ROOT/vcpkg" install \
