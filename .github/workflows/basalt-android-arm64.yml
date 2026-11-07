@@ -90,10 +90,21 @@ jobs:
           test -n "$LIB"
           LLVM_READelf="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
           "$LLVM_READelf" -h "$LIB" | grep -q "AArch64"
-          LIBCXX="$(find "$ANDROID_NDK_HOME" -type f -path '*/arm64-v8a/libc++_shared.so' -print -quit)"
+          LIBCXX="$(find "$ANDROID_NDK_HOME" -type f -name 'libc++_shared.so' | grep -E '/(aarch64-linux-android|arm64-v8a)/libc\\+\\+_shared\\.so          printf '%s\n' "0f3b2b52c807f70ff4e2973ce253c73329eea7bc" > basalt-android-arm64-artifact/BASALT_COMMIT.txt
+          "$LLVM_READelf" -d "$LIB" > basalt-android-arm64-artifact/dynamic-dependencies.txt
+
+      - name: Upload isolated Basalt arm64 build
+        uses: actions/upload-artifact@v4
+        with:
+          name: basalt-android-arm64-spike
+          path: basalt-android-arm64-artifact/
+          if-no-files-found: error
+          retention-days: 14
+ | head -n1)"
           test -n "$LIBCXX"
           mkdir -p basalt-android-arm64-artifact
           cp "$LIB" basalt-android-arm64-artifact/
+          find "$GITHUB_WORKSPACE/build/basalt-vcpkg-installed/arm64-android" -type f -name '*.so' -exec cp -n {} basalt-android-arm64-artifact/ \\;
           cp "$LIBCXX" basalt-android-arm64-artifact/
           printf '%s\n' "0f3b2b52c807f70ff4e2973ce253c73329eea7bc" > basalt-android-arm64-artifact/BASALT_COMMIT.txt
           "$LLVM_READelf" -d "$LIB" > basalt-android-arm64-artifact/dynamic-dependencies.txt
