@@ -40,12 +40,20 @@ data class CaptureStats(
     val gyroZ: String = "0.000",
     val accelX: String = "0.000",
     val accelY: String = "0.000",
-    val accelZ: String = "0.000"
+    val accelZ: String = "0.000",
+    val gyroDeltaX: String = "0.000",
+    val gyroDeltaY: String = "0.000",
+    val gyroDeltaZ: String = "0.000",
+    val imuIntervalMs: String = "0.0",
+    val imuSampleCount: Int = 0,
+    val imuDeltaValid: Boolean = false,
+    val cameraTimestampSource: String = "UNKNOWN"
 )
 
 /**
- * First milestone only: acquire camera frames and timestamped IMU samples.
- * No image copies, recording, SLAM, or reconstruction are performed here.
+ * Camera2/IMU acquisition and first-stage visual-inertial timing.
+ * Optical flow and gyro samples are associated using camera/IMU monotonic timestamps.
+ * This is not yet a metric VIO pose estimator or a 3D reconstruction engine.
  */
 class CameraImuCaptureController(
     private val context: Context,
@@ -55,6 +63,7 @@ class CameraImuCaptureController(
     private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val mainHandler = Handler(context.mainLooper)
+    private val imuPreintegrator = ImuPreintegrator()
 
     private var textureView: TextureView? = null
     private var cameraThread: HandlerThread? = null
@@ -75,7 +84,9 @@ class CameraImuCaptureController(
     private var latestMotionY = 0.0
     private var lastGyro = floatArrayOf(0f, 0f, 0f)
     private var lastAccel = floatArrayOf(0f, 0f, 0f)
-    private var latestFrameTimestampNs = 0L
+    private var previousFrameTimestampNs = 0L
+    private var cameraTimestampSource = "UNKNOWN"
+    private var latestGyroDelta = ImuPreintegrator.Delta(false)
 
     fun attach(view: TextureView) {
         if (textureView === view) return
@@ -88,6 +99,11 @@ class CameraImuCaptureController(
         if (running) return
         running = true
         NativeFeatureTracker.reset()
+        imuPreintegrator.reset()
+        previousFrameTimestampNs = 0L
+        frameCount = 0L
+        cameraTimestampSource = "UNKNOWN"
+        latestGyroDelta = ImuPreintegrator.Delta(false)
         cameraThread = HandlerThread("AR-Camera-IMU").also { it.start() }
         cameraHandler = Handler(cameraThread!!.looper)
         loggerThread = HandlerThread("AR-Session-Logger").also { it.start() }
@@ -98,7 +114,7 @@ class CameraImuCaptureController(
             try {
                 sessionWriter = FileWriter(sessionLogFile!!, false).buffered()
                 sessionWriter?.apply {
-                    write("type,timestamp_ns,a,b,c,d,e,f")
+                    write("record_type,timestamp_ns,frame_width,frame_height,features_detected,features_tracked,mean_flow_x_px,mean_flow_y_px,sensor_type,vector_x,vector_y,vector_z,delta_rotation_x_rad,delta_rotation_y_rad,delta_rotation_z_rad,interval_ms,imu_samples,camera_timestamp_source")
                     newLine()
                     flush()
                 }
@@ -118,6 +134,8 @@ class CameraImuCaptureController(
         if (!running) return
         running = false
         NativeFeatureTracker.reset()
+        imuPreintegrator.reset()
+        previousFrameTimestampNs = 0L
         sensorManager.unregisterListener(this)
         closeCamera()
         cameraThread?.quitSafely()
@@ -158,6 +176,13 @@ class CameraImuCaptureController(
             }
 
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            cameraTimestampSource = when (
+                characteristics.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
+            ) {
+                CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME -> "REALTIME"
+                CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN -> "UNKNOWN"
+                else -> "UNKNOWN"
+            }
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             if (map == null) {
                 publish("Camera does not expose stream configuration")
@@ -178,17 +203,23 @@ class CameraImuCaptureController(
                     var image: Image? = null
                     try {
                         image = source.acquireLatestImage()
-                        if (image != null) {
-                            latestFrameTimestampNs = image.timestamp
+                        if (image != null && running) {
+                            val frameTimestamp = image.timestamp
                             frameCount++
                             val plane = image.planes[0]
                             val buffer = plane.buffer
-                            // Pack Y into a tightly-strided image; camera rows may contain padding.
+                            val basePosition = buffer.position()
+                            val requiredLimit = basePosition +
+                                (image.height - 1) * plane.rowStride +
+                                (image.width - 1) * plane.pixelStride + 1
+                            if (requiredLimit > buffer.limit()) {
+                                throw IllegalStateException("Camera luma plane buffer is shorter than its stride metadata")
+                            }
                             val luma = ByteArray(image.width * image.height)
                             for (y in 0 until image.height) {
                                 for (x in 0 until image.width) {
                                     luma[y * image.width + x] =
-                                        buffer.get(y * plane.rowStride + x * plane.pixelStride)
+                                        buffer.get(basePosition + y * plane.rowStride + x * plane.pixelStride)
                                 }
                             }
                             val result = NativeFeatureTracker.processFrame(
@@ -198,11 +229,25 @@ class CameraImuCaptureController(
                             latestTracked = result.getOrElse(1) { 0L }.toInt()
                             latestMotionX = result.getOrElse(2) { 0L } / 1000.0
                             latestMotionY = result.getOrElse(3) { 0L } / 1000.0
-                            logCsv("FRAME,${image.timestamp},${image.width},${image.height},${latestFeatures},${latestTracked},${latestMotionX},${latestMotionY}")
-                            publishThrottled("Native feature tracking active")
+
+                            if (cameraTimestampSource == "REALTIME" && previousFrameTimestampNs > 0L) {
+                                latestGyroDelta = imuPreintegrator.integrate(previousFrameTimestampNs, frameTimestamp)
+                                if (latestGyroDelta.valid) {
+                                    logCsv("IMU_DELTA,$frameTimestamp,,,,,,,,,,,${latestGyroDelta.rotationXRad},${latestGyroDelta.rotationYRad},${latestGyroDelta.rotationZRad},${latestGyroDelta.intervalSeconds * 1000.0},${latestGyroDelta.sampleCount},$cameraTimestampSource")
+                                }
+                            } else {
+                                latestGyroDelta = ImuPreintegrator.Delta(false)
+                            }
+                            previousFrameTimestampNs = frameTimestamp
+
+                            logCsv("FRAME,$frameTimestamp,${image.width},${image.height},$latestFeatures,$latestTracked,$latestMotionX,$latestMotionY,,,,,,,,,,$cameraTimestampSource")
+                            publishThrottled(
+                                if (cameraTimestampSource == "REALTIME") "Camera + IMU timing active"
+                                else "Camera active — IMU fusion unavailable (unknown timestamp source)"
+                            )
                         }
                     } catch (_: IllegalStateException) {
-                        // A frame can be discarded if the consumer falls behind.
+                        // A frame can be discarded if the consumer falls behind or has invalid plane metadata.
                     } finally {
                         image?.close()
                     }
@@ -231,7 +276,7 @@ class CameraImuCaptureController(
                     publish("Camera error: $error")
                 }
             }, cameraHandler)
-        } catch (security: SecurityException) {
+        } catch (_: SecurityException) {
             publish("Camera permission is missing")
         } catch (error: Exception) {
             publish("Camera setup failed: ${error.javaClass.simpleName}")
@@ -289,8 +334,7 @@ class CameraImuCaptureController(
     private fun closeCamera() {
         try {
             captureSession?.stopRepeating()
-        } catch (_: Exception) {
-        }
+        } catch (_: Exception) { }
         captureSession?.close()
         captureSession = null
         cameraDevice?.close()
@@ -301,7 +345,18 @@ class CameraImuCaptureController(
 
     override fun onSensorChanged(event: SensorEvent) {
         val values = event.values
-        logCsv("IMU,${event.timestamp},${event.sensor.type},${values.getOrElse(0) { 0f }},${values.getOrElse(1) { 0f }},${values.getOrElse(2) { 0f }}")
+        if (event.sensor.type == Sensor.TYPE_GYROSCOPE) {
+            imuPreintegrator.addGyroscope(
+                event.timestamp,
+                values.getOrElse(0) { 0f },
+                values.getOrElse(1) { 0f },
+                values.getOrElse(2) { 0f }
+            )
+        }
+        val x = values.getOrElse(0) { 0f }
+        val y = values.getOrElse(1) { 0f }
+        val z = values.getOrElse(2) { 0f }
+        logCsv("IMU,${event.timestamp},,,,,,,${event.sensor.type},$x,$y,$z,,,,,,")
         when (event.sensor.type) {
             Sensor.TYPE_GYROSCOPE -> lastGyro = values.copyOf()
             Sensor.TYPE_ACCELEROMETER -> lastAccel = values.copyOf()
@@ -330,6 +385,7 @@ class CameraImuCaptureController(
     }
 
     private fun publish(status: String) {
+        val delta = latestGyroDelta
         val snapshot = CaptureStats(
             status = status,
             frameCount = frameCount,
@@ -342,7 +398,14 @@ class CameraImuCaptureController(
             gyroZ = format(lastGyro.getOrElse(2) { 0f }),
             accelX = format(lastAccel.getOrElse(0) { 0f }),
             accelY = format(lastAccel.getOrElse(1) { 0f }),
-            accelZ = format(lastAccel.getOrElse(2) { 0f })
+            accelZ = format(lastAccel.getOrElse(2) { 0f }),
+            gyroDeltaX = format(delta.rotationXRad.toFloat()),
+            gyroDeltaY = format(delta.rotationYRad.toFloat()),
+            gyroDeltaZ = format(delta.rotationZRad.toFloat()),
+            imuIntervalMs = String.format(Locale.US, "%.1f", delta.intervalSeconds * 1000.0),
+            imuSampleCount = delta.sampleCount,
+            imuDeltaValid = delta.valid,
+            cameraTimestampSource = cameraTimestampSource
         )
         mainHandler.post { onStats(snapshot) }
     }

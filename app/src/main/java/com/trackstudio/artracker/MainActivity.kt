@@ -99,7 +99,7 @@ private fun CaptureScreen() {
                 fontSize = 18.sp
             )
             Text(
-                text = "NATIVE FEATURE TRACKING TEST",
+                text = "VISUAL + INERTIAL TIMING TEST",
                 color = Color(0xFF9AA7B5),
                 fontSize = 11.sp
             )
@@ -150,11 +150,21 @@ private fun CaptureScreen() {
                 color = Color(0xFFB9C5D2),
                 fontSize = 12.sp
             )
+            Text(
+                "Gyro delta / frame (rad): ${stats.gyroDeltaX}, ${stats.gyroDeltaY}, ${stats.gyroDeltaZ}",
+                color = Color(0xFFB9C5D2),
+                fontSize = 12.sp
+            )
+            Text(
+                "IMU interval: ${stats.imuIntervalMs} ms  |  samples: ${stats.imuSampleCount}  |  valid: ${stats.imuDeltaValid}",
+                color = Color(0xFFB9C5D2),
+                fontSize = 12.sp
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Frame timestamps: monotonic", color = Color(0xFF778596), fontSize = 11.sp)
+                Text("Camera clock: ${stats.cameraTimestampSource}", color = Color(0xFF778596), fontSize = 11.sp)
                 Text("API 26+", color = Color(0xFF778596), fontSize = 11.sp)
             }
         }
