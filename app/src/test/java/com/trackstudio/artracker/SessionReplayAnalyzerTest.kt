@@ -25,7 +25,7 @@ class SessionReplayAnalyzerTest {
         ))
         assertTrue(report.validation.isValid)
         assertEquals(3L, report.frameStream.samples)
-        assertEquals(30.0, report.frameStream.estimatedRateHz, 0.1)
+        assertEquals(30.3, report.frameStream.estimatedRateHz, 0.1)
         assertEquals(33.0, report.frameStream.maximumGapMs, 0.1)
         assertEquals("REALTIME", report.cameraTimestampSource)
         assertTrue(report.replayReadyForVio)

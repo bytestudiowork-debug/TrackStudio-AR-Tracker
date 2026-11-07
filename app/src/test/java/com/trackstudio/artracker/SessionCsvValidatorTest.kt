@@ -4,9 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SessionCsvValidatorTest {
-    private val header = (1..27).joinToString(",") {
-        when (it) { 1 -> "record_type"; 2 -> "timestamp_ns"; else -> "column$it" }
-    }
+    private val header = SessionCsvValidator.EXPECTED_HEADER.joinToString(",")
     private fun row(type: String, timestamp: Long, sensor: String = ""): String {
         val f = MutableList(27) { "" }
         f[0] = type; f[1] = timestamp.toString(); f[8] = sensor
