@@ -64,7 +64,7 @@ This separation is deliberate: it prevents an unverified desktop dependency grap
 
 ## Android arm64 build wrapper
 
-The isolated wrapper is in `third_party/basalt-android`; it is outside the upstream submodule. It uses the pinned upstream vcpkg baseline and the upstream overlay ports, but omits the optional RealSense device package because the Android capture source is Camera2. The wrapper sets an explicit `armv8-a` target and disables upstream's Unix fully-static executable-link option. It does not edit or patch Basalt source.
+The isolated wrapper is in `third_party/basalt-android`; it is outside the upstream submodule. It uses the pinned upstream vcpkg baseline and the upstream overlay ports, but omits the optional RealSense device package because the Android capture source is Camera2. The wrapper sets an explicit `armv8-a` target and disables upstream's Unix fully-static executable-link option. It supplies a tiny Pangolin package-config shim because Pangolin is used by Basalt's desktop tools, not by the `basalt` shared-library target; those desktop executables are configured but never built in this Android spike. This avoids cross-building a desktop GUI stack. It does not edit or patch Basalt source.
 
 The `Basalt Android arm64 build spike` workflow recursively checks out the pinned Basalt and vcpkg submodules, installs the Android NDK 27.0.12077973, resolves the wrapper's dependency manifest, and builds only the upstream `basalt` shared-library target. If successful, it verifies the ELF architecture and uploads `libbasalt.so` plus `libc++_shared.so`. This is an isolated build artifact, not yet packaged into the app.
 

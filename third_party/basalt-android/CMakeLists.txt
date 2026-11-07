@@ -17,6 +17,7 @@ if(NOT TARGET stdc++fs)
 endif()
 
 # Keep upstream source untouched. These are cross-compilation/build options only.
+set(Pangolin_DIR "${CMAKE_CURRENT_LIST_DIR}/cmake/pangolin" CACHE PATH "No-GUI config for the Basalt core-only Android build" FORCE)
 set(BASALT_BUILD_SHARED_LIB ON CACHE BOOL "Build Basalt as a shared library" FORCE)
 set(BASALT_FULLY_STATIC_BINARIES OFF CACHE BOOL "Do not request Linux static executable linking" FORCE)
 set(CXX_MARCH "armv8-a" CACHE STRING "Explicit Android arm64 architecture" FORCE)

@@ -21,11 +21,6 @@
       "default-features": false,
       "features": ["calib3d", "jpeg", "png", "webp"]
     },
-    {
-      "name": "pangolin",
-      "default-features": false,
-      "features": ["jpeg", "png"]
-    },
     "tbb",
     "basalt-headers",
     "opengv",
