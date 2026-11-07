@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(trackstudio_tracker LANGUAGES CXX)
+add_library(trackstudio_tracker SHARED native_feature_tracker.cpp)
+target_compile_features(trackstudio_tracker PRIVATE cxx_std_17)
+target_compile_options(trackstudio_tracker PRIVATE -O3 -fno-exceptions -fno-rtti)

@@ -99,7 +99,7 @@ private fun CaptureScreen() {
                 fontSize = 18.sp
             )
             Text(
-                text = "CAMERA + IMU CAPTURE TEST",
+                text = "NATIVE FEATURE TRACKING TEST",
                 color = Color(0xFF9AA7B5),
                 fontSize = 11.sp
             )
@@ -138,6 +138,8 @@ private fun CaptureScreen() {
             Spacer(Modifier.height(12.dp))
             Text(stats.status, color = Color(0xFF73D6A5), fontSize = 13.sp)
             Text("Camera frames: ${stats.frameCount}", color = Color.White)
+            Text("Features detected: ${stats.featureCount}  |  Tracked: ${stats.trackedFeatureCount}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
+            Text("Mean image motion: ${stats.meanMotionX}, ${stats.meanMotionY} px/frame", color = Color(0xFFB9C5D2), fontSize = 12.sp)
             Text(
                 "Gyroscope (rad/s): ${stats.gyroX}, ${stats.gyroY}, ${stats.gyroZ}",
                 color = Color(0xFFB9C5D2),

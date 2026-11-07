@@ -28,6 +28,10 @@ import kotlin.math.abs
 data class CaptureStats(
     val status: String = "Waiting for camera permission",
     val frameCount: Long = 0,
+    val featureCount: Int = 0,
+    val trackedFeatureCount: Int = 0,
+    val meanMotionX: String = "0.000",
+    val meanMotionY: String = "0.000",
     val gyroX: String = "0.000",
     val gyroY: String = "0.000",
     val gyroZ: String = "0.000",
@@ -58,6 +62,10 @@ class CameraImuCaptureController(
     private var running = false
     private var frameCount = 0L
     private var lastUiUpdateNs = 0L
+    private var latestFeatures = 0
+    private var latestTracked = 0
+    private var latestMotionX = 0.0
+    private var latestMotionY = 0.0
     private var lastGyro = floatArrayOf(0f, 0f, 0f)
     private var lastAccel = floatArrayOf(0f, 0f, 0f)
     private var latestFrameTimestampNs = 0L
@@ -140,7 +148,18 @@ class CameraImuCaptureController(
                         if (image != null) {
                             latestFrameTimestampNs = image.timestamp
                             frameCount++
-                            publishThrottled("Capturing camera frames")
+                            val plane = image.planes[0]
+                            val buffer = plane.buffer
+                            val luma = ByteArray(buffer.remaining())
+                            buffer.get(luma)
+                            val result = NativeFeatureTracker.processFrame(
+                                luma, image.width, image.height, plane.rowStride, plane.pixelStride
+                            )
+                            latestFeatures = result.getOrElse(0) { 0L }.toInt()
+                            latestTracked = result.getOrElse(1) { 0L }.toInt()
+                            latestMotionX = result.getOrElse(2) { 0L } / 1000.0
+                            latestMotionY = result.getOrElse(3) { 0L } / 1000.0
+                            publishThrottled("Native feature tracking active")
                         }
                     } catch (_: IllegalStateException) {
                         // A frame can be discarded if the consumer falls behind.
@@ -263,6 +282,10 @@ class CameraImuCaptureController(
         val snapshot = CaptureStats(
             status = status,
             frameCount = frameCount,
+            featureCount = latestFeatures,
+            trackedFeatureCount = latestTracked,
+            meanMotionX = String.format(Locale.US, "%.3f", latestMotionX),
+            meanMotionY = String.format(Locale.US, "%.3f", latestMotionY),
             gyroX = format(lastGyro.getOrElse(0) { 0f }),
             gyroY = format(lastGyro.getOrElse(1) { 0f }),
             gyroZ = format(lastGyro.getOrElse(2) { 0f }),
