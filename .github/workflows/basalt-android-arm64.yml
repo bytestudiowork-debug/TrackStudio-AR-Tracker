@@ -53,7 +53,7 @@ jobs:
 
       - name: Fetch full vcpkg history for versioned port trees
         run: |
-          git -C "$VCPKG_ROOT" fetch --unshallow origin
+          git -C "$VCPKG_ROOT" fetch --unshallow origin master
           git -C "$VCPKG_ROOT" cat-file -e 05442024c3fda64320bd25d2251cc9807b84fb6f^{commit}
 
       - name: Install Android arm64 Basalt dependencies
