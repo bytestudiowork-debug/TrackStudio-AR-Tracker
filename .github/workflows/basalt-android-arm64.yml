@@ -60,6 +60,7 @@ jobs:
         run: |
           "$VCPKG_ROOT/vcpkg" install \
             --triplet arm64-android \
+            --overlay-triplets="$GITHUB_WORKSPACE/third_party/basalt-android/vcpkg-triplets" \
             --host-triplet x64-linux \
             --x-manifest-root="$GITHUB_WORKSPACE/third_party/basalt-android" \
             --x-install-root="$GITHUB_WORKSPACE/build/basalt-vcpkg-installed"
@@ -68,7 +69,7 @@ jobs:
         run: |
           cmake -S third_party/basalt-android -B build/basalt-android-arm64 -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/third_party/basalt-android/cmake/android-toolchain-policy.cmake" \
             -DVCPKG_TARGET_TRIPLET=arm64-android \
             -DVCPKG_HOST_TRIPLET=x64-linux \
             -DVCPKG_MANIFEST_MODE=OFF \
