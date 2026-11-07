@@ -1,0 +1,3 @@
+[submodule "basalt"]
+	path = third_party/basalt
+	url = https://github.com/VladyslavUsenko/basalt.git

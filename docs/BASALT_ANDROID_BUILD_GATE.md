@@ -1,0 +1,61 @@
+# Basalt upstream integration gate
+
+## Upstream source pin
+
+Basalt is included as an unmodified Git submodule:
+
+- Repository: https://github.com/VladyslavUsenko/basalt
+- Upstream branch: `master`
+- Pinned commit: `0f3b2b52c807f70ff4e2973ce253c73329eea7bc`
+- Upstream commit date: 2026-03-22
+- Basalt's nested vcpkg submodule pin: `1e199d32ad53aab1defda61ce41c380302e3f95c`
+
+The Git submodule entry is the complete source integration at this stage. Do not copy Basalt files into the app, edit Basalt source, carry local patches, or silently advance the pin. All TrackStudio-specific code belongs outside `third_party/basalt`. The source-integrity workflow checks the exact pin and a clean submodule worktree.
+
+## Why the source is isolated
+
+The Android app currently builds with CMake 3.22.1. The pinned Basalt upstream requires CMake 3.24 or newer and documents a vcpkg/Ninja source build. Its root CMake configuration resolves a substantial dependency graph, including Eigen, TBB, OpenCV, Boost, LZ4, fmt, CLI11, magic_enum, nlohmann-json, opengv, rosbag, Pangolin, basalt-headers and GTest. The project also vendors ROS message support and AprilTag code.
+
+Basalt's upstream CMake defaults include `CXX_MARCH=native` and fully static executable linking on Unix. Those defaults must not be allowed to leak into an Android cross-build. The Android wrapper must pass an explicit Android architecture and appropriate shared-library/link options without changing upstream files.
+
+The current upstream CMake project is not yet demonstrated to build as an Android arm64 library with this app's NDK. A desktop Basalt build is not proof of an Android build. Do not add Basalt to the app's existing CMake target or raise the app's global CMake version until a separate arm64 Android configure/build is reproducible.
+
+## Current TrackStudio input readiness
+
+Already available:
+- Camera2 analysis frames with a packed luma crop and frame timestamps.
+- Raw Android gyroscope values (rad/s) and accelerometer values (m/s²) with SensorEvent timestamps.
+- Camera/IMU fusion is conservatively allowed only when Camera2 reports the REALTIME timestamp source.
+- Camera metadata, stream crop/stride information and sensor timing diagnostics are written to session metadata.
+
+Still missing before a real Basalt run:
+- Persisted camera image frames. Current captures log frame diagnostics and optical-flow statistics, not the actual images required for offline VIO replay.
+- A validated camera model transformed into the exact cropped/resized analysis-frame coordinate system.
+- Measured camera-to-IMU spatial extrinsics.
+- Gyroscope/accelerometer bias and noise-density/random-walk calibration.
+- An offline dataset adapter that feeds raw image and IMU measurements to Basalt in timestamp order.
+
+Do not pass TrackStudio's prototype gravity-subtracted acceleration or approximate per-frame delta-position values into Basalt. Basalt must receive raw calibrated measurements and perform its own estimator-side preintegration.
+
+## Integration sequence
+
+1. Keep the upstream submodule pristine and pinned; verify its nested dependency pins and license inventory.
+2. Add bounded, timestamped camera-frame recording alongside the existing raw IMU capture. Preserve the actual analysis crop and pixel format.
+3. Add an offline replay adapter outside the Basalt source tree. Validate timestamp order, camera model, sensor units and calibration before starting the estimator.
+4. Build Basalt as an isolated Android arm64 native dependency with a separate CMake toolchain/wrapper. Keep the app's existing CMake 3.22.1 path and armeabi-v7a fallback independent until supported.
+5. Connect the adapter to the Basalt public API without editing Basalt source. Add deterministic dataset tests and verify the exact upstream commit in CI.
+6. Only then enable live Camera2/SensorManager streaming into Basalt and benchmark on physical entry-, mid- and flagship devices.
+
+## License gate
+
+Basalt's top-level source is BSD-3-Clause. That does not automatically license every dependency or bundled component. Audit the exact vcpkg baseline, all resolved package licenses, vendored ROS/AprilTag code and any binary redistribution obligations before shipping an APK containing Basalt or its dependencies. Preserve upstream copyright and license notices.
+
+## Current status
+
+- Upstream source: pinned, unmodified submodule.
+- App build: remains independent and unchanged by the Basalt source pin.
+- Android Basalt library: not built yet.
+- JNI/runtime VIO: not connected yet.
+- Physical-device VIO accuracy: not tested.
+
+This separation is deliberate: it prevents an unverified desktop dependency graph from breaking the working Android release while keeping the exact upstream implementation available for integration.

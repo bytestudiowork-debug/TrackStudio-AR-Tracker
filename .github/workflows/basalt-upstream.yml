@@ -1,0 +1,28 @@
+name: Basalt upstream integrity
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".gitmodules"
+      - "third_party/basalt"
+      - "docs/BASALT_ANDROID_BUILD_GATE.md"
+      - "scripts/verify-basalt-source.sh"
+      - ".github/workflows/basalt-upstream.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-upstream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout pinned Basalt submodule
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Verify pristine upstream source and dependency pin
+        run: bash scripts/verify-basalt-source.sh
