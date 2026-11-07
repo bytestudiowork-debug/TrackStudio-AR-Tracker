@@ -51,6 +51,11 @@ jobs:
       - name: Bootstrap pinned vcpkg
         run: ./third_party/basalt/thirdparty/vcpkg/bootstrap-vcpkg.sh -disableMetrics
 
+      - name: Fetch the exact upstream vcpkg registry baseline
+        run: |
+          git -C "$VCPKG_ROOT" fetch --depth=1 origin 05442024c3fda64320bd25d2251cc9807b84fb6f
+          git -C "$VCPKG_ROOT" cat-file -e 05442024c3fda64320bd25d2251cc9807b84fb6f^{commit}
+
       - name: Install Android arm64 Basalt dependencies
         run: |
           "$VCPKG_ROOT/vcpkg" install \
