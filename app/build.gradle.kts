@@ -34,8 +34,7 @@ android {
 
     buildTypes {
         release {
-            // Optimized, installable test build. Replace debug signing with a protected
-            // release keystore before publishing to users or Play Store.
+            // Installable test build. Use a protected, stable release key before publishing.
             signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
@@ -48,9 +47,9 @@ android {
 }
 
 androidComponents {
-    // This project produces Release APKs only; do not configure or build Debug variants.
-    beforeVariants(selector().withBuildType("debug")) {
-        enable = false
+    // This project produces Release APKs only; disable Debug before variant creation.
+    beforeVariants(selector().withBuildType("debug")) { variantBuilder ->
+        variantBuilder.enable = false
     }
 }
 
