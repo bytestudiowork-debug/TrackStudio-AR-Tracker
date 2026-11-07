@@ -25,7 +25,9 @@ internal object SessionMetadataWriter {
         gyro: Sensor?,
         accelerometer: Sensor?,
         gyroDiagnostics: SensorStreamDiagnostics.Snapshot,
-        accelDiagnostics: SensorStreamDiagnostics.Snapshot
+        accelDiagnostics: SensorStreamDiagnostics.Snapshot,
+        frameDiagnostics: CameraFrameDiagnostics.Snapshot,
+        analysisStream: CameraAnalysisStreamMetadata?
     ): JSONObject {
         val root = JSONObject()
             .put("schemaVersion", 2)
@@ -47,6 +49,8 @@ internal object SessionMetadataWriter {
             .put("sensorDiagnostics", JSONObject()
                 .put("gyroscope", diagnosticsJson(gyroDiagnostics))
                 .put("accelerometer", diagnosticsJson(accelDiagnostics)))
+            .put("cameraFrameDiagnostics", frameDiagnosticsJson(frameDiagnostics))
+            .put("analysisStream", analysisStreamJson(analysisStream))
 
         if (cameraId != null && characteristics != null) {
             root.put("camera", cameraJson(cameraId, characteristics))
@@ -129,6 +133,34 @@ internal object SessionMetadataWriter {
             .put("maximumDelayUs", sensor.maxDelay)
             .put("reportingMode", sensor.reportingMode)
             .put("wakeUpSensor", sensor.isWakeUpSensor)
+    }
+
+    private fun frameDiagnosticsJson(s: CameraFrameDiagnostics.Snapshot) = JSONObject()
+        .put("acceptedFrames", s.acceptedFrames)
+        .put("invalidTimestamps", s.invalidTimestamps)
+        .put("outOfOrderTimestamps", s.outOfOrderTimestamps)
+        .put("meanIntervalMs", s.meanIntervalMs)
+        .put("maximumIntervalMs", s.maximumIntervalMs)
+        .put("estimatedRateHz", s.estimatedRateHz)
+        .put("gapsOver100ms", s.longGapCount)
+        .put("lastTimestampNs", s.lastTimestampNs)
+
+    private fun analysisStreamJson(s: CameraAnalysisStreamMetadata?): JSONObject {
+        if (s == null) return JSONObject().put("available", false)
+        return JSONObject()
+            .put("available", true)
+            .put("imageWidth", s.width)
+            .put("imageHeight", s.height)
+            .put("imageFormat", s.imageFormat)
+            .put("cropRect", JSONObject()
+                .put("left", s.cropLeft).put("top", s.cropTop)
+                .put("right", s.cropRight).put("bottom", s.cropBottom)
+                .put("width", s.cropRight - s.cropLeft)
+                .put("height", s.cropBottom - s.cropTop))
+            .put("yPlaneRowStride", s.rowStride)
+            .put("yPlanePixelStride", s.pixelStride)
+            .put("intrinsicsTransformApplied", false)
+            .put("note", "Crop and plane layout describe the observed ImageReader frame. Camera2 intrinsics are retained in their native coordinate convention; no unverified transform is applied.")
     }
 
     private fun diagnosticsJson(s: SensorStreamDiagnostics.Snapshot) = JSONObject()

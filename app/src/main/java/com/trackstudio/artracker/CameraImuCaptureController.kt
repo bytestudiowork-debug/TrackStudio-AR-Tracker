@@ -56,7 +56,11 @@ data class CaptureStats(
     val accelRateHz: String = "0.0",
     val gyroMaxGapMs: String = "0.0",
     val accelMaxGapMs: String = "0.0",
-    val cameraCalibrationStatus: String = "not available"
+    val cameraCalibrationStatus: String = "not available",
+    val cameraRateHz: String = "0.0",
+    val cameraMaxGapMs: String = "0.0",
+    val cameraTimestampErrors: Long = 0,
+    val analysisStreamSummary: String = "not available"
 )
 
 /**
@@ -75,6 +79,8 @@ class CameraImuCaptureController(
     private val imuPreintegrator = ImuPreintegrator()
     private val gyroDiagnostics = SensorStreamDiagnostics()
     private val accelDiagnostics = SensorStreamDiagnostics()
+    private val frameDiagnostics = CameraFrameDiagnostics()
+    @Volatile private var analysisStreamMetadata: CameraAnalysisStreamMetadata? = null
     private var gyroSensor: Sensor? = null
     private var accelerometerSensor: Sensor? = null
     private var sessionStartedAtUnixMs = 0L
@@ -125,6 +131,8 @@ class CameraImuCaptureController(
         cameraTimestampSource = "UNKNOWN"
         gyroDiagnostics.reset()
         accelDiagnostics.reset()
+        frameDiagnostics.reset()
+        analysisStreamMetadata = null
         sessionStartedAtUnixMs = System.currentTimeMillis()
         activeCameraId = null
         activeCameraCharacteristics = null
@@ -254,25 +262,33 @@ class CameraImuCaptureController(
                         image = source.acquireLatestImage()
                         if (image != null && running) {
                             val frameTimestamp = image.timestamp
-                            frameCount++
-                            val plane = image.planes[0]
-                            val buffer = plane.buffer
-                            val basePosition = buffer.position()
-                            val requiredLimit = basePosition +
-                                (image.height - 1) * plane.rowStride +
-                                (image.width - 1) * plane.pixelStride + 1
-                            if (requiredLimit > buffer.limit()) {
-                                throw IllegalStateException("Camera luma plane buffer is shorter than its stride metadata")
+                            if (!frameDiagnostics.record(frameTimestamp)) {
+                                throw IllegalStateException("Camera frame timestamp is invalid or out of order")
                             }
-                            val luma = ByteArray(image.width * image.height)
-                            for (y in 0 until image.height) {
-                                for (x in 0 until image.width) {
-                                    luma[y * image.width + x] =
-                                        buffer.get(basePosition + y * plane.rowStride + x * plane.pixelStride)
-                                }
+                            frameCount = frameDiagnostics.snapshot().acceptedFrames
+                            val plane = image.planes[0]
+                            val crop = image.cropRect
+                            val packed = LumaFramePacker.pack(
+                                buffer = plane.buffer,
+                                imageWidth = image.width,
+                                imageHeight = image.height,
+                                rowStride = plane.rowStride,
+                                pixelStride = plane.pixelStride,
+                                cropLeft = crop.left,
+                                cropTop = crop.top,
+                                cropRight = crop.right,
+                                cropBottom = crop.bottom
+                            )
+                            if (analysisStreamMetadata == null) {
+                                analysisStreamMetadata = CameraAnalysisStreamMetadata(
+                                    image.width, image.height, image.format,
+                                    crop.left, crop.top, crop.right, crop.bottom,
+                                    plane.rowStride, plane.pixelStride
+                                )
+                                enqueueSessionMetadataWrite()
                             }
                             val result = NativeFeatureTracker.processFrame(
-                                luma, image.width, image.height, image.width, 1
+                                packed.pixels, packed.width, packed.height, packed.width, 1
                             )
                             latestFeatures = result.getOrElse(0) { 0L }.toInt()
                             latestTracked = result.getOrElse(1) { 0L }.toInt()
@@ -296,7 +312,7 @@ class CameraImuCaptureController(
                             previousFrameTimestampNs = frameTimestamp
 
                             val gravity = imuPreintegrator.gravityEstimate()
-                            logCsvFields("FRAME", frameTimestamp, image.width, image.height, latestFeatures, latestTracked, latestMotionX, latestMotionY, null, null, null, null, null, null, null, null, null, cameraTimestampSource, null, null, null, null, null, null, gravity.x.takeIf { gravity.valid }, gravity.y.takeIf { gravity.valid }, gravity.z.takeIf { gravity.valid })
+                            logCsvFields("FRAME", frameTimestamp, packed.width, packed.height, latestFeatures, latestTracked, latestMotionX, latestMotionY, null, null, null, null, null, null, null, null, null, cameraTimestampSource, null, null, null, null, null, null, gravity.x.takeIf { gravity.valid }, gravity.y.takeIf { gravity.valid }, gravity.z.takeIf { gravity.valid })
                             publishThrottled(
                                 if (cameraTimestampSource == "REALTIME") "Camera + IMU timing active"
                                 else "Camera active — IMU fusion unavailable (unknown timestamp source)"
@@ -487,7 +503,14 @@ class CameraImuCaptureController(
             accelRateHz = String.format(Locale.US, "%.1f", accelHealth.estimatedRateHz),
             gyroMaxGapMs = String.format(Locale.US, "%.1f", gyroHealth.maxIntervalMs),
             accelMaxGapMs = String.format(Locale.US, "%.1f", accelHealth.maxIntervalMs),
-            cameraCalibrationStatus = cameraCalibrationStatus
+            cameraCalibrationStatus = cameraCalibrationStatus,
+            cameraRateHz = String.format(Locale.US, "%.1f", frameDiagnostics.snapshot().estimatedRateHz),
+            cameraMaxGapMs = String.format(Locale.US, "%.1f", frameDiagnostics.snapshot().maximumIntervalMs),
+            cameraTimestampErrors = frameDiagnostics.snapshot().invalidTimestamps +
+                frameDiagnostics.snapshot().outOfOrderTimestamps,
+            analysisStreamSummary = analysisStreamMetadata?.let {
+                "${it.width}x${it.height} crop ${it.cropRight - it.cropLeft}x${it.cropBottom - it.cropTop}"
+            } ?: "not available"
         )
         mainHandler.post { onStats(snapshot) }
     }
@@ -502,7 +525,9 @@ class CameraImuCaptureController(
             gyro = gyroSensor,
             accelerometer = accelerometerSensor,
             gyroDiagnostics = gyroDiagnostics.snapshot(),
-            accelDiagnostics = accelDiagnostics.snapshot()
+            accelDiagnostics = accelDiagnostics.snapshot(),
+            frameDiagnostics = frameDiagnostics.snapshot(),
+            analysisStream = analysisStreamMetadata
         )
         loggerHandler?.post {
             try {
