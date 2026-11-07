@@ -18,6 +18,7 @@ import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
+import java.io.BufferedWriter
 import java.io.File
 import java.io.FileWriter
 import android.util.Size
@@ -61,6 +62,7 @@ class CameraImuCaptureController(
     private var loggerThread: HandlerThread? = null
     private var loggerHandler: Handler? = null
     private var sessionLogFile: File? = null
+    private var sessionWriter: BufferedWriter? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
@@ -93,9 +95,11 @@ class CameraImuCaptureController(
         sessionLogFile = File(logDir, "capture-${System.currentTimeMillis()}.csv")
         loggerHandler?.post {
             try {
-                FileWriter(sessionLogFile!!, false).buffered().use { writer ->
-                    writer.write("type,timestamp_ns,a,b,c,d,e,f")
-                    writer.newLine()
+                sessionWriter = FileWriter(sessionLogFile!!, false).buffered()
+                sessionWriter?.apply {
+                    write("type,timestamp_ns,a,b,c,d,e,f")
+                    newLine()
+                    flush()
                 }
             } catch (_: Exception) { }
         }
@@ -118,8 +122,11 @@ class CameraImuCaptureController(
         cameraThread = null
         cameraHandler = null
         loggerHandler?.post {
-            try { sessionLogFile?.let { FileWriter(it, true).buffered().use { writer -> writer.flush() } } }
-            catch (_: Exception) { }
+            try {
+                sessionWriter?.flush()
+                sessionWriter?.close()
+                sessionWriter = null
+            } catch (_: Exception) { }
         }
         loggerThread?.quitSafely()
         loggerThread = null
@@ -304,8 +311,9 @@ class CameraImuCaptureController(
     private fun logCsv(line: String) {
         loggerHandler?.post {
             try {
-                val file = sessionLogFile ?: return@post
-                FileWriter(file, true).buffered().use { writer -> writer.append(line); writer.newLine() }
+                val writer = sessionWriter ?: return@post
+                writer.append(line)
+                writer.newLine()
             } catch (_: Exception) { }
         }
     }
