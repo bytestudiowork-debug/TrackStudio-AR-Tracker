@@ -72,6 +72,8 @@ class CameraImuCaptureController(
     private var textureView: TextureView? = null
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
+    private var sensorThread: HandlerThread? = null
+    private var sensorHandler: Handler? = null
     private var loggerThread: HandlerThread? = null
     private var loggerHandler: Handler? = null
     private var sessionLogFile: File? = null
@@ -79,15 +81,15 @@ class CameraImuCaptureController(
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
-    private var running = false
+    @Volatile private var running = false
     private var frameCount = 0L
     private var lastUiUpdateNs = 0L
     private var latestFeatures = 0
     private var latestTracked = 0
     private var latestMotionX = 0.0
     private var latestMotionY = 0.0
-    private var lastGyro = floatArrayOf(0f, 0f, 0f)
-    private var lastAccel = floatArrayOf(0f, 0f, 0f)
+    @Volatile private var lastGyro = floatArrayOf(0f, 0f, 0f)
+    @Volatile private var lastAccel = floatArrayOf(0f, 0f, 0f)
     private var previousFrameTimestampNs = 0L
     private var cameraTimestampSource = "UNKNOWN"
     private var latestGyroDelta = ImuPreintegrator.Delta(false)
@@ -111,6 +113,10 @@ class CameraImuCaptureController(
         latestGyroDelta = ImuPreintegrator.Delta(false)
         cameraThread = HandlerThread("AR-Camera-IMU").also { it.start() }
         cameraHandler = Handler(cameraThread!!.looper)
+        // Keep high-rate sensor callbacks off the image-processing thread. Optical flow can
+        // take several milliseconds per frame; sharing the handler would starve IMU sampling.
+        sensorThread = HandlerThread("AR-Sensor-IMU").also { it.start() }
+        sensorHandler = Handler(sensorThread!!.looper)
         loggerThread = HandlerThread("AR-Session-Logger").also { it.start() }
         loggerHandler = Handler(loggerThread!!.looper)
         val logDir = File(context.filesDir, "sessions").apply { mkdirs() }
@@ -128,8 +134,8 @@ class CameraImuCaptureController(
 
         val gyro = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         val accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        if (gyro != null) sensorManager.registerListener(this, gyro, SensorManager.SENSOR_DELAY_GAME, cameraHandler)
-        if (accel != null) sensorManager.registerListener(this, accel, SensorManager.SENSOR_DELAY_GAME, cameraHandler)
+        if (gyro != null) sensorManager.registerListener(this, gyro, SensorManager.SENSOR_DELAY_GAME, sensorHandler)
+        if (accel != null) sensorManager.registerListener(this, accel, SensorManager.SENSOR_DELAY_GAME, sensorHandler)
 
         publish("Starting camera and motion sensors")
         openCameraIfReady()
@@ -142,6 +148,9 @@ class CameraImuCaptureController(
         imuPreintegrator.reset()
         previousFrameTimestampNs = 0L
         sensorManager.unregisterListener(this)
+        sensorThread?.quitSafely()
+        sensorThread = null
+        sensorHandler = null
         closeCamera()
         cameraThread?.quitSafely()
         cameraThread = null
