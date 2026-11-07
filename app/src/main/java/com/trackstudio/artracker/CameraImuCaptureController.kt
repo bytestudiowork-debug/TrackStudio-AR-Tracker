@@ -87,6 +87,7 @@ class CameraImuCaptureController(
     fun start() {
         if (running) return
         running = true
+        NativeFeatureTracker.reset()
         cameraThread = HandlerThread("AR-Camera-IMU").also { it.start() }
         cameraHandler = Handler(cameraThread!!.looper)
         loggerThread = HandlerThread("AR-Session-Logger").also { it.start() }
@@ -116,6 +117,7 @@ class CameraImuCaptureController(
     fun stop() {
         if (!running) return
         running = false
+        NativeFeatureTracker.reset()
         sensorManager.unregisterListener(this)
         closeCamera()
         cameraThread?.quitSafely()
