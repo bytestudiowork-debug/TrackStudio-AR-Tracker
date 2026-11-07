@@ -28,49 +28,57 @@ internal object SessionCsvValidator {
         val isValid: Boolean
     )
 
-    fun validate(lines: Sequence<String>): Report {
-        val iterator = lines.iterator()
-        if (!iterator.hasNext()) return emptyReport(false)
-        val header = iterator.next().removePrefix("\uFEFF").split(',')
-        if (header != EXPECTED_HEADER) return emptyReport(false)
+    /** Stateful, constant-memory validator shared with the replay analyzer. */
+    internal class Accumulator {
+        private var headerSeen = false
+        var headerValid = false
+            private set
+        private var total = 0L
+        private var frames = 0L
+        private var imu = 0L
+        private var gyroDelta = 0L
+        private var accelDelta = 0L
+        private var malformed = 0L
+        private var invalid = 0L
+        private var outOfOrder = 0L
+        private var unsupported = 0L
+        private val lastByStream = HashMap<String, Long>()
 
-        var total = 0L
-        var frames = 0L
-        var imu = 0L
-        var gyroDelta = 0L
-        var accelDelta = 0L
-        var malformed = 0L
-        var invalid = 0L
-        var outOfOrder = 0L
-        var unsupported = 0L
-        val lastByStream = HashMap<String, Long>()
-
-        while (iterator.hasNext()) {
-            val row = iterator.next()
-            if (row.isBlank()) continue
+        /** Returns fields only for a structurally usable row. */
+        fun accept(line: String): List<String>? {
+            if (!headerSeen) {
+                headerSeen = true
+                headerValid = line.removePrefix("\uFEFF").split(',') == EXPECTED_HEADER
+                return null
+            }
+            if (!headerValid || line.isBlank()) return null
             total++
-            val fields = row.split(',')
+            val fields = line.split(',')
             if (fields.size != EXPECTED_COLUMN_COUNT) {
                 malformed++
-                continue
+                return null
             }
             val type = fields[0]
             val stream = when (type) {
                 "FRAME" -> "FRAME"
-                "IMU" -> "IMU:${fields[8]}"
+                "IMU" -> {
+                    if (fields[8] != "1" && fields[8] != "4") {
+                        unsupported++
+                        return null
+                    }
+                    "IMU:${fields[8]}"
+                }
                 "IMU_DELTA" -> "IMU_DELTA"
                 "ACCEL_DELTA" -> "ACCEL_DELTA"
                 else -> {
                     unsupported++
-                    null
+                    return null
                 }
             }
-            if (stream == null) continue
-
             val timestamp = fields[1].toLongOrNull()
             if (timestamp == null || timestamp <= 0L) {
                 invalid++
-                continue
+                return null
             }
             when (type) {
                 "FRAME" -> frames++
@@ -84,25 +92,25 @@ internal object SessionCsvValidator {
             } else {
                 lastByStream[stream] = timestamp
             }
+            return fields
         }
 
-        return Report(
-            headerValid = true,
-            totalRows = total,
-            frameRows = frames,
-            imuRows = imu,
-            gyroDeltaRows = gyroDelta,
-            accelerationDeltaRows = accelDelta,
-            malformedRows = malformed,
-            invalidTimestamps = invalid,
-            outOfOrderTimestamps = outOfOrder,
-            unsupportedRows = unsupported,
-            isValid = malformed == 0L && invalid == 0L &&
-                outOfOrder == 0L && unsupported == 0L
-        )
+        fun finish(): Report {
+            if (!headerSeen || !headerValid) return emptyReport(headerValid)
+            return Report(
+                headerValid, total, frames, imu, gyroDelta, accelDelta,
+                malformed, invalid, outOfOrder, unsupported,
+                malformed == 0L && invalid == 0L && outOfOrder == 0L && unsupported == 0L
+            )
+        }
     }
 
-    private fun emptyReport(headerValid: Boolean) = Report(
-        headerValid, 0, 0, 0, 0, 0, 0, 0, 0, 0, false
-    )
+    fun validate(lines: Sequence<String>): Report {
+        val accumulator = Accumulator()
+        lines.forEach(accumulator::accept)
+        return accumulator.finish()
+    }
+
+    private fun emptyReport(headerValid: Boolean) =
+        Report(headerValid, 0, 0, 0, 0, 0, 0, 0, 0, 0, false)
 }
