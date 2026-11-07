@@ -58,6 +58,15 @@ internal object SessionCsvValidator {
                 malformed++
                 return null
             }
+
+            // Validate the timestamp before sensor/type-specific checks so a row
+            // with multiple defects is consistently classified as a bad timestamp.
+            val timestamp = fields[1].toLongOrNull()
+            if (timestamp == null || timestamp <= 0L) {
+                invalid++
+                return null
+            }
+
             val type = fields[0]
             val stream = when (type) {
                 "FRAME" -> "FRAME"
@@ -74,11 +83,6 @@ internal object SessionCsvValidator {
                     unsupported++
                     return null
                 }
-            }
-            val timestamp = fields[1].toLongOrNull()
-            if (timestamp == null || timestamp <= 0L) {
-                invalid++
-                return null
             }
             when (type) {
                 "FRAME" -> frames++
