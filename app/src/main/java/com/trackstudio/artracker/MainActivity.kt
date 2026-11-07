@@ -137,7 +137,9 @@ private fun CaptureScreen() {
 
             Spacer(Modifier.height(12.dp))
             Text(stats.status, color = Color(0xFF73D6A5), fontSize = 13.sp)
-            Text("Camera frames: ${stats.frameCount}", color = Color.White)
+            Text("Camera frames: ${stats.frameCount}  |  ${stats.cameraRateHz} Hz", color = Color.White)
+            Text("Camera max frame gap: ${stats.cameraMaxGapMs} ms  |  timestamp errors: ${stats.cameraTimestampErrors}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
+            Text("Analysis stream: ${stats.analysisStreamSummary}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
             Text("Features detected: ${stats.featureCount}  |  Tracked: ${stats.trackedFeatureCount}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
             Text("Mean image motion: ${stats.meanMotionX}, ${stats.meanMotionY} px/frame", color = Color(0xFFB9C5D2), fontSize = 12.sp)
             Text(

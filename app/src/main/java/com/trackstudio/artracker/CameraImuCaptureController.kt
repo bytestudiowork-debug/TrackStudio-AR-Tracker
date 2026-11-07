@@ -302,8 +302,8 @@ class CameraImuCaptureController(
                                 else "Camera active — IMU fusion unavailable (unknown timestamp source)"
                             )
                         }
-                    } catch (_: IllegalStateException) {
-                        // A frame can be discarded if the consumer falls behind or has invalid plane metadata.
+                    } catch (_: RuntimeException) {
+                        // Drop malformed or stale frames without terminating the camera callback thread.
                     } finally {
                         image?.close()
                     }

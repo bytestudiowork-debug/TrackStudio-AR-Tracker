@@ -1,5 +1,5 @@
 name: Release APK
-# CI validates IMU integration tests, OpenCV dependency and native-library packaging.
+# CI validates camera/IMU capture diagnostics, CSV integrity, OpenCV and native packaging.
 
 on:
   workflow_dispatch:
@@ -33,7 +33,7 @@ jobs:
         with:
           gradle-version: "8.6"
 
-      - name: Run IMU unit tests
+      - name: Run capture and IMU unit tests
         run: gradle testReleaseUnitTest --no-daemon --stacktrace
 
       - name: Build optimized release APK

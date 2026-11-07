@@ -40,3 +40,12 @@ The current low-pass gravity and per-frame accelerometer deltas are diagnostic p
 ## Basalt integration gate
 
 Before feeding sessions into Basalt, the integration must establish a consistent camera model, image dimensions/crop, camera-to-IMU transform, sensor units, timestamp domain and sensor noise parameters. The next native adapter should consume raw calibrated gyro and accelerometer samples plus camera frames; it should not consume the prototype gravity-subtracted acceleration as if it were a calibrated measurement.
+
+
+## Camera-frame diagnostics and stream layout
+
+The session sidecar also stores the observed ImageReader frame rate, frame interval distribution, timestamp errors and long gaps. The first accepted analysis frame records the actual image dimensions, crop rectangle, Y-plane row stride and pixel stride. The luma copy respects these values and feeds a tightly packed crop to optical flow. Intrinsics are not silently rescaled: the exact analysis crop and source metadata are retained so a later calibrated adapter can apply a documented coordinate transform.
+
+The capture pipeline rejects invalid or non-monotonic camera timestamps before optical flow or inertial interval integration. A passing frame timestamp monitor still does not prove that camera and IMU clocks share a domain; fusion remains gated by the Camera2 timestamp-source metadata.
+
+See [SESSION_VALIDATION.md](SESSION_VALIDATION.md) for the CSV structural validator and its limitations.

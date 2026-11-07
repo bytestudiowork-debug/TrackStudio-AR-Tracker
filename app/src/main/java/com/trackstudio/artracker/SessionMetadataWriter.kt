@@ -28,7 +28,7 @@ internal object SessionMetadataWriter {
         accelDiagnostics: SensorStreamDiagnostics.Snapshot
     ): JSONObject {
         val root = JSONObject()
-            .put("schemaVersion", 1)
+            .put("schemaVersion", 2)
             .put("sessionStartedAtUnixMs", startedAtUnixMs)
             .put("app", JSONObject()
                 .put("applicationId", context.packageName)
