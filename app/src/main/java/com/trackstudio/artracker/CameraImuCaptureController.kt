@@ -18,6 +18,8 @@ import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
+import java.io.File
+import java.io.FileWriter
 import android.util.Size
 import android.view.Surface
 import android.view.TextureView
@@ -56,6 +58,9 @@ class CameraImuCaptureController(
     private var textureView: TextureView? = null
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
+    private var loggerThread: HandlerThread? = null
+    private var loggerHandler: Handler? = null
+    private var sessionLogFile: File? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
@@ -82,6 +87,18 @@ class CameraImuCaptureController(
         running = true
         cameraThread = HandlerThread("AR-Camera-IMU").also { it.start() }
         cameraHandler = Handler(cameraThread!!.looper)
+        loggerThread = HandlerThread("AR-Session-Logger").also { it.start() }
+        loggerHandler = Handler(loggerThread!!.looper)
+        val logDir = File(context.filesDir, "sessions").apply { mkdirs() }
+        sessionLogFile = File(logDir, "capture-${System.currentTimeMillis()}.csv")
+        loggerHandler?.post {
+            try {
+                FileWriter(sessionLogFile!!, false).buffered().use { writer ->
+                    writer.write("type,timestamp_ns,a,b,c,d,e,f")
+                    writer.newLine()
+                }
+            } catch (_: Exception) { }
+        }
 
         val gyro = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         val accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
@@ -100,7 +117,14 @@ class CameraImuCaptureController(
         cameraThread?.quitSafely()
         cameraThread = null
         cameraHandler = null
-        publish("Capture stopped")
+        loggerHandler?.post {
+            try { sessionLogFile?.let { FileWriter(it, true).buffered().use { writer -> writer.flush() } } }
+            catch (_: Exception) { }
+        }
+        loggerThread?.quitSafely()
+        loggerThread = null
+        loggerHandler = null
+        publish("Capture stopped — session data saved")
     }
 
     private fun openCameraIfReady() {
@@ -150,15 +174,22 @@ class CameraImuCaptureController(
                             frameCount++
                             val plane = image.planes[0]
                             val buffer = plane.buffer
-                            val luma = ByteArray(buffer.remaining())
-                            buffer.get(luma)
+                            // Pack Y into a tightly-strided image; camera rows may contain padding.
+                            val luma = ByteArray(image.width * image.height)
+                            for (y in 0 until image.height) {
+                                for (x in 0 until image.width) {
+                                    luma[y * image.width + x] =
+                                        buffer.get(y * plane.rowStride + x * plane.pixelStride)
+                                }
+                            }
                             val result = NativeFeatureTracker.processFrame(
-                                luma, image.width, image.height, plane.rowStride, plane.pixelStride
+                                luma, image.width, image.height, image.width, 1
                             )
                             latestFeatures = result.getOrElse(0) { 0L }.toInt()
                             latestTracked = result.getOrElse(1) { 0L }.toInt()
                             latestMotionX = result.getOrElse(2) { 0L } / 1000.0
                             latestMotionY = result.getOrElse(3) { 0L } / 1000.0
+                            logCsv("FRAME,${image.timestamp},${image.width},${image.height},${latestFeatures},${latestTracked},${latestMotionX},${latestMotionY}")
                             publishThrottled("Native feature tracking active")
                         }
                     } catch (_: IllegalStateException) {
@@ -261,12 +292,22 @@ class CameraImuCaptureController(
 
     override fun onSensorChanged(event: SensorEvent) {
         val values = event.values
+        logCsv("IMU,${event.timestamp},${event.sensor.type},${values.getOrElse(0) { 0f }},${values.getOrElse(1) { 0f }},${values.getOrElse(2) { 0f }}")
         when (event.sensor.type) {
             Sensor.TYPE_GYROSCOPE -> lastGyro = values.copyOf()
             Sensor.TYPE_ACCELEROMETER -> lastAccel = values.copyOf()
             else -> return
         }
         publishThrottled("Camera + IMU capture running")
+    }
+
+    private fun logCsv(line: String) {
+        loggerHandler?.post {
+            try {
+                val file = sessionLogFile ?: return@post
+                FileWriter(file, true).buffered().use { writer -> writer.append(line); writer.newLine() }
+            } catch (_: Exception) { }
+        }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
