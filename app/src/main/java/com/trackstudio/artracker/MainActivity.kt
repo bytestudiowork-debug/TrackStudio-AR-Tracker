@@ -155,6 +155,9 @@ private fun CaptureScreen() {
                 color = Color(0xFFB9C5D2),
                 fontSize = 12.sp
             )
+            Text("Gravity estimate (m/s², low-pass): ${stats.gravityEstimate}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
+            Text("Accel Δ velocity (m/s): ${stats.accelDeltaVelocity}  |  valid: ${stats.accelDeltaValid}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
+            Text("Accel Δ position (m, approximate): ${stats.accelDeltaPosition}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
             Text(
                 "IMU interval: ${stats.imuIntervalMs} ms  |  samples: ${stats.imuSampleCount}  |  valid: ${stats.imuDeltaValid}",
                 color = Color(0xFFB9C5D2),

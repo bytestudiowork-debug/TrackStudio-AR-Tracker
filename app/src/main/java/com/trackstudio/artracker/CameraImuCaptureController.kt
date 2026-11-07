@@ -47,7 +47,11 @@ data class CaptureStats(
     val imuIntervalMs: String = "0.0",
     val imuSampleCount: Int = 0,
     val imuDeltaValid: Boolean = false,
-    val cameraTimestampSource: String = "UNKNOWN"
+    val cameraTimestampSource: String = "UNKNOWN",
+    val accelDeltaVelocity: String = "0.000, 0.000, 0.000",
+    val accelDeltaPosition: String = "0.000, 0.000, 0.000",
+    val accelDeltaValid: Boolean = false,
+    val gravityEstimate: String = "unavailable"
 )
 
 /**
@@ -87,6 +91,7 @@ class CameraImuCaptureController(
     private var previousFrameTimestampNs = 0L
     private var cameraTimestampSource = "UNKNOWN"
     private var latestGyroDelta = ImuPreintegrator.Delta(false)
+    private var latestAccelDelta = ImuPreintegrator.AccelerationDelta(false)
 
     fun attach(view: TextureView) {
         if (textureView === view) return
@@ -114,7 +119,7 @@ class CameraImuCaptureController(
             try {
                 sessionWriter = FileWriter(sessionLogFile!!, false).buffered()
                 sessionWriter?.apply {
-                    write("record_type,timestamp_ns,frame_width,frame_height,features_detected,features_tracked,mean_flow_x_px,mean_flow_y_px,sensor_type,vector_x,vector_y,vector_z,delta_rotation_x_rad,delta_rotation_y_rad,delta_rotation_z_rad,interval_ms,imu_samples,camera_timestamp_source")
+                    write("record_type,timestamp_ns,frame_width,frame_height,features_detected,features_tracked,mean_flow_x_px,mean_flow_y_px,sensor_type,vector_x,vector_y,vector_z,delta_rotation_x_rad,delta_rotation_y_rad,delta_rotation_z_rad,interval_ms,imu_samples,camera_timestamp_source,delta_velocity_x_mps,delta_velocity_y_mps,delta_velocity_z_mps,delta_position_x_m,delta_position_y_m,delta_position_z_m,gravity_x_mps2,gravity_y_mps2,gravity_z_mps2")
                     newLine()
                     flush()
                 }
@@ -232,15 +237,22 @@ class CameraImuCaptureController(
 
                             if (cameraTimestampSource == "REALTIME" && previousFrameTimestampNs > 0L) {
                                 latestGyroDelta = imuPreintegrator.integrate(previousFrameTimestampNs, frameTimestamp)
+                                latestAccelDelta = imuPreintegrator.integrateAcceleration(previousFrameTimestampNs, frameTimestamp)
                                 if (latestGyroDelta.valid) {
-                                    logCsv("IMU_DELTA,$frameTimestamp,,,,,,,,,,,${latestGyroDelta.rotationXRad},${latestGyroDelta.rotationYRad},${latestGyroDelta.rotationZRad},${latestGyroDelta.intervalSeconds * 1000.0},${latestGyroDelta.sampleCount},$cameraTimestampSource")
+                                    logCsvFields("IMU_DELTA", frameTimestamp, null, null, null, null, null, null, null, null, null, null, latestGyroDelta.rotationXRad, latestGyroDelta.rotationYRad, latestGyroDelta.rotationZRad, latestGyroDelta.intervalSeconds * 1000.0, latestGyroDelta.sampleCount, cameraTimestampSource)
+                                }
+                                if (latestAccelDelta.valid) {
+                                    val gravity = imuPreintegrator.gravityEstimate()
+                                    logCsvFields("ACCEL_DELTA", frameTimestamp, null, null, null, null, null, null, null, null, null, null, null, null, null, latestAccelDelta.intervalSeconds * 1000.0, latestAccelDelta.sampleCount, cameraTimestampSource, latestAccelDelta.velocityX, latestAccelDelta.velocityY, latestAccelDelta.velocityZ, latestAccelDelta.positionX, latestAccelDelta.positionY, latestAccelDelta.positionZ, gravity.x, gravity.y, gravity.z)
                                 }
                             } else {
                                 latestGyroDelta = ImuPreintegrator.Delta(false)
+                                latestAccelDelta = ImuPreintegrator.AccelerationDelta(false)
                             }
                             previousFrameTimestampNs = frameTimestamp
 
-                            logCsv("FRAME,$frameTimestamp,${image.width},${image.height},$latestFeatures,$latestTracked,$latestMotionX,$latestMotionY,,,,,,,,,,,$cameraTimestampSource")
+                            val gravity = imuPreintegrator.gravityEstimate()
+                            logCsvFields("FRAME", frameTimestamp, image.width, image.height, latestFeatures, latestTracked, latestMotionX, latestMotionY, null, null, null, null, null, null, null, null, null, cameraTimestampSource, null, null, null, null, null, null, gravity.x.takeIf { gravity.valid }, gravity.y.takeIf { gravity.valid }, gravity.z.takeIf { gravity.valid })
                             publishThrottled(
                                 if (cameraTimestampSource == "REALTIME") "Camera + IMU timing active"
                                 else "Camera active — IMU fusion unavailable (unknown timestamp source)"
@@ -345,24 +357,28 @@ class CameraImuCaptureController(
 
     override fun onSensorChanged(event: SensorEvent) {
         val values = event.values
-        if (event.sensor.type == Sensor.TYPE_GYROSCOPE) {
-            imuPreintegrator.addGyroscope(
-                event.timestamp,
-                values.getOrElse(0) { 0f },
-                values.getOrElse(1) { 0f },
-                values.getOrElse(2) { 0f }
+        when (event.sensor.type) {
+            Sensor.TYPE_GYROSCOPE -> imuPreintegrator.addGyroscope(
+                event.timestamp, values.getOrElse(0) { 0f }, values.getOrElse(1) { 0f }, values.getOrElse(2) { 0f }
+            )
+            Sensor.TYPE_ACCELEROMETER -> imuPreintegrator.addAccelerometer(
+                event.timestamp, values.getOrElse(0) { 0f }, values.getOrElse(1) { 0f }, values.getOrElse(2) { 0f }
             )
         }
         val x = values.getOrElse(0) { 0f }
         val y = values.getOrElse(1) { 0f }
         val z = values.getOrElse(2) { 0f }
-        logCsv("IMU,${event.timestamp},,,,,,,${event.sensor.type},$x,$y,$z,,,,,,")
+        logCsvFields("IMU", event.timestamp, null, null, null, null, null, null, event.sensor.type, x, y, z, null, null, null, null, null, cameraTimestampSource)
         when (event.sensor.type) {
             Sensor.TYPE_GYROSCOPE -> lastGyro = values.copyOf()
             Sensor.TYPE_ACCELEROMETER -> lastAccel = values.copyOf()
             else -> return
         }
         publishThrottled("Camera + IMU capture running")
+    }
+
+    private fun logCsvFields(vararg fields: Any?) {
+        logCsv(fields.joinToString(",") { it?.toString() ?: "" })
     }
 
     private fun logCsv(line: String) {
@@ -386,6 +402,8 @@ class CameraImuCaptureController(
 
     private fun publish(status: String) {
         val delta = latestGyroDelta
+        val accelDelta = latestAccelDelta
+        val gravity = imuPreintegrator.gravityEstimate()
         val snapshot = CaptureStats(
             status = status,
             frameCount = frameCount,
@@ -405,12 +423,19 @@ class CameraImuCaptureController(
             imuIntervalMs = String.format(Locale.US, "%.1f", delta.intervalSeconds * 1000.0),
             imuSampleCount = delta.sampleCount,
             imuDeltaValid = delta.valid,
-            cameraTimestampSource = cameraTimestampSource
+            cameraTimestampSource = cameraTimestampSource,
+            accelDeltaVelocity = vector(accelDelta.velocityX, accelDelta.velocityY, accelDelta.velocityZ),
+            accelDeltaPosition = vector(accelDelta.positionX, accelDelta.positionY, accelDelta.positionZ),
+            accelDeltaValid = accelDelta.valid,
+            gravityEstimate = if (gravity.valid) vector(gravity.x, gravity.y, gravity.z) else "unavailable"
         )
         mainHandler.post { onStats(snapshot) }
     }
 
     private fun format(value: Float): String = String.format(Locale.US, "%.3f", value)
+
+    private fun vector(x: Double, y: Double, z: Double): String =
+        String.format(Locale.US, "%.3f, %.3f, %.3f", x, y, z)
 
     private fun choosePreviewSize(sizes: Array<Size>): Size {
         return sizes.filter { it.width <= 1920 && it.height <= 1080 }
