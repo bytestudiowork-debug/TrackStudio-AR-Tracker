@@ -1,0 +1,94 @@
+name: Basalt Android arm64 build spike
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "third_party/basalt-android/**"
+      - "third_party/basalt"
+      - ".github/workflows/basalt-android-arm64.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-basalt-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      VCPKG_MAX_CONCURRENCY: 2
+    steps:
+      - name: Checkout Basalt and its pinned dependency submodule
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install pinned Android NDK and Ninja
+        run: |
+          sdkmanager "ndk;27.0.12077973"
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Configure build tools
+        run: |
+          echo "VCPKG_ROOT=$GITHUB_WORKSPACE/third_party/basalt/thirdparty/vcpkg" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          cmake --version
+          ninja --version
+
+      - name: Bootstrap pinned vcpkg
+        run: ./third_party/basalt/thirdparty/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+
+      - name: Install Android arm64 Basalt dependencies
+        run: |
+          "$VCPKG_ROOT/vcpkg" install \
+            --triplet arm64-android \
+            --host-triplet x64-linux \
+            --x-manifest-root="$GITHUB_WORKSPACE/third_party/basalt-android" \
+            --x-install-root="$GITHUB_WORKSPACE/build/basalt-vcpkg-installed"
+
+      - name: Configure untouched Basalt source for Android
+        run: |
+          cmake -S third_party/basalt-android -B build/basalt-android-arm64 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DVCPKG_TARGET_TRIPLET=arm64-android \
+            -DVCPKG_HOST_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/build/basalt-vcpkg-installed" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Build upstream Basalt shared library only
+        run: cmake --build build/basalt-android-arm64 --target basalt --parallel 2
+
+      - name: Verify arm64 output and collect runtime
+        run: |
+          set -euo pipefail
+          LIB="$(find build/basalt-android-arm64 -type f -name 'libbasalt.so' -print -quit)"
+          test -n "$LIB"
+          LLVM_READelf="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          "$LLVM_READelf" -h "$LIB" | grep -q "AArch64"
+          LIBCXX="$(find "$ANDROID_NDK_HOME" -type f -path '*/arm64-v8a/libc++_shared.so' -print -quit)"
+          test -n "$LIBCXX"
+          mkdir -p basalt-android-arm64-artifact
+          cp "$LIB" basalt-android-arm64-artifact/
+          cp "$LIBCXX" basalt-android-arm64-artifact/
+          printf '%s\n' "0f3b2b52c807f70ff4e2973ce253c73329eea7bc" > basalt-android-arm64-artifact/BASALT_COMMIT.txt
+          "$LLVM_READelf" -d "$LIB" > basalt-android-arm64-artifact/dynamic-dependencies.txt
+
+      - name: Upload isolated Basalt arm64 build
+        uses: actions/upload-artifact@v4
+        with:
+          name: basalt-android-arm64-spike
+          path: basalt-android-arm64-artifact/
+          if-no-files-found: error
+          retention-days: 14

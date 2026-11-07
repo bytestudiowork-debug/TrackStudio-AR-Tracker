@@ -60,3 +60,30 @@ Basalt's top-level source is BSD-3-Clause. That does not automatically license e
 - Physical-device VIO accuracy: not tested.
 
 This separation is deliberate: it prevents an unverified desktop dependency graph from breaking the working Android release while keeping the exact upstream implementation available for integration.
+
+
+## Android arm64 build wrapper
+
+The isolated wrapper is in `third_party/basalt-android`; it is outside the upstream submodule. It uses the pinned upstream vcpkg baseline and the upstream overlay ports, but omits the optional RealSense device package because the Android capture source is Camera2. The wrapper sets an explicit `armv8-a` target and disables upstream's Unix fully-static executable-link option. It does not edit or patch Basalt source.
+
+The `Basalt Android arm64 build spike` workflow recursively checks out the pinned Basalt and vcpkg submodules, installs the Android NDK 27.0.12077973, resolves the wrapper's dependency manifest, and builds only the upstream `basalt` shared-library target. If successful, it verifies the ELF architecture and uploads `libbasalt.so` plus `libc++_shared.so`. This is an isolated build artifact, not yet packaged into the app.
+
+## Upstream runtime API boundary
+
+The pinned upstream live VIO example wires the public components as follows:
+
+- `OpticalFlowFactory::getOpticalFlow(vio_config, calibration)` creates the upstream optical-flow frontend.
+- `OpticalFlowBase::input_queue` receives `OpticalFlowInput` records containing `t_ns` and camera `img_data`.
+- The frontend's `output_queue` is connected to `VioEstimatorBase::vision_data_queue`.
+- `VioEstimatorFactory::getVioEstimator(...)` creates the estimator; raw measurements enter `imu_data_queue` as `ImuData<double>` with timestamp, acceleration and gyro.
+- Estimated states are emitted through `out_state_queue`.
+
+Basalt's `ImageData` uses `ManagedImage<uint16_t>`. Its EuRoC loader expands an 8-bit grayscale pixel to the high byte (`uint16 = gray8 << 8`). The future TrackStudio adapter must preserve this upstream intensity convention when converting the TSBF GRAY8 archive; it must not modify Basalt's optical-flow implementation.
+
+## Status of this milestone
+
+- Upstream source and nested vcpkg source are pinned and verified clean.
+- TrackStudio records timestamped grayscale frames and raw IMU events.
+- Archive reader/writer and integrity tests are implemented.
+- Android arm64 Basalt build workflow is added; its result is pending.
+- JNI queues, calibrated camera model/extrinsics, live VIO output and device benchmarks remain future gates.

@@ -1,0 +1,34 @@
+{
+  "name": "trackstudio-basalt-android",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "boost-date-time",
+    "boost-filesystem",
+    "boost-format",
+    "boost-program-options",
+    "boost-regex",
+    "boost-thread",
+    "bzip2",
+    "cli11",
+    "eigen3",
+    "fmt",
+    "gtest",
+    "lz4",
+    "magic-enum",
+    "nlohmann-json",
+    {
+      "name": "opencv4",
+      "default-features": false,
+      "features": ["calib3d", "jpeg", "png", "webp"]
+    },
+    {
+      "name": "pangolin",
+      "default-features": false,
+      "features": ["jpeg", "png"]
+    },
+    "tbb",
+    "basalt-headers",
+    "opengv",
+    "rosbag"
+  ]
+}
