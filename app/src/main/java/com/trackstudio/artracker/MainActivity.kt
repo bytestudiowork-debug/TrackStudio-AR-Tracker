@@ -156,6 +156,9 @@ private fun CaptureScreen() {
                 fontSize = 12.sp
             )
             Text("Gravity estimate (m/s², low-pass): ${stats.gravityEstimate}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
+            Text("Observed IMU rate (Hz): gyro ${stats.gyroRateHz}  |  accel ${stats.accelRateHz}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
+            Text("Largest sensor interval (ms): gyro ${stats.gyroMaxGapMs}  |  accel ${stats.accelMaxGapMs}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
+            Text("Camera calibration: ${stats.cameraCalibrationStatus}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
             Text("Accel Δ velocity (m/s): ${stats.accelDeltaVelocity}  |  valid: ${stats.accelDeltaValid}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
             Text("Accel Δ position (m, approximate): ${stats.accelDeltaPosition}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
             Text(

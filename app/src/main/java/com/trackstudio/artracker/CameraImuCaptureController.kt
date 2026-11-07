@@ -51,7 +51,12 @@ data class CaptureStats(
     val accelDeltaVelocity: String = "0.000, 0.000, 0.000",
     val accelDeltaPosition: String = "0.000, 0.000, 0.000",
     val accelDeltaValid: Boolean = false,
-    val gravityEstimate: String = "unavailable"
+    val gravityEstimate: String = "unavailable",
+    val gyroRateHz: String = "0.0",
+    val accelRateHz: String = "0.0",
+    val gyroMaxGapMs: String = "0.0",
+    val accelMaxGapMs: String = "0.0",
+    val cameraCalibrationStatus: String = "not available"
 )
 
 /**
@@ -68,6 +73,14 @@ class CameraImuCaptureController(
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val mainHandler = Handler(context.mainLooper)
     private val imuPreintegrator = ImuPreintegrator()
+    private val gyroDiagnostics = SensorStreamDiagnostics()
+    private val accelDiagnostics = SensorStreamDiagnostics()
+    private var gyroSensor: Sensor? = null
+    private var accelerometerSensor: Sensor? = null
+    private var sessionStartedAtUnixMs = 0L
+    private var sessionMetadataFile: File? = null
+    private var activeCameraId: String? = null
+    private var activeCameraCharacteristics: CameraCharacteristics? = null
 
     private var textureView: TextureView? = null
     private var cameraThread: HandlerThread? = null
@@ -82,6 +95,7 @@ class CameraImuCaptureController(
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
     @Volatile private var running = false
+    @Volatile private var cameraTimestampSource = "UNKNOWN"
     private var frameCount = 0L
     private var lastUiUpdateNs = 0L
     private var latestFeatures = 0
@@ -91,7 +105,6 @@ class CameraImuCaptureController(
     @Volatile private var lastGyro = floatArrayOf(0f, 0f, 0f)
     @Volatile private var lastAccel = floatArrayOf(0f, 0f, 0f)
     private var previousFrameTimestampNs = 0L
-    private var cameraTimestampSource = "UNKNOWN"
     private var latestGyroDelta = ImuPreintegrator.Delta(false)
     private var latestAccelDelta = ImuPreintegrator.AccelerationDelta(false)
 
@@ -110,6 +123,11 @@ class CameraImuCaptureController(
         previousFrameTimestampNs = 0L
         frameCount = 0L
         cameraTimestampSource = "UNKNOWN"
+        gyroDiagnostics.reset()
+        accelDiagnostics.reset()
+        sessionStartedAtUnixMs = System.currentTimeMillis()
+        activeCameraId = null
+        activeCameraCharacteristics = null
         latestGyroDelta = ImuPreintegrator.Delta(false)
         cameraThread = HandlerThread("AR-Camera-IMU").also { it.start() }
         cameraHandler = Handler(cameraThread!!.looper)
@@ -120,7 +138,11 @@ class CameraImuCaptureController(
         loggerThread = HandlerThread("AR-Session-Logger").also { it.start() }
         loggerHandler = Handler(loggerThread!!.looper)
         val logDir = File(context.filesDir, "sessions").apply { mkdirs() }
-        sessionLogFile = File(logDir, "capture-${System.currentTimeMillis()}.csv")
+        val sessionStem = "capture-$sessionStartedAtUnixMs"
+        sessionLogFile = File(logDir, "$sessionStem.csv")
+        sessionMetadataFile = File(logDir, "$sessionStem.json")
+        gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+        accelerometerSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         loggerHandler?.post {
             try {
                 sessionWriter = FileWriter(sessionLogFile!!, false).buffered()
@@ -130,12 +152,21 @@ class CameraImuCaptureController(
                     flush()
                 }
             } catch (_: Exception) { }
+            writeSessionMetadata()
         }
 
-        val gyro = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
-        val accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        if (gyro != null) sensorManager.registerListener(this, gyro, SensorManager.SENSOR_DELAY_GAME, sensorHandler)
-        if (accel != null) sensorManager.registerListener(this, accel, SensorManager.SENSOR_DELAY_GAME, sensorHandler)
+        val gyroRegistered = gyroSensor?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME, sensorHandler)
+        } ?: false
+        val accelRegistered = accelerometerSensor?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME, sensorHandler)
+        } ?: false
+        if (!gyroRegistered || !accelRegistered) {
+            publish("Capture started — missing " + listOfNotNull(
+                if (!gyroRegistered) "gyroscope" else null,
+                if (!accelRegistered) "accelerometer" else null
+            ).joinToString(" and "))
+        }
 
         publish("Starting camera and motion sensors")
         openCameraIfReady()
@@ -148,6 +179,7 @@ class CameraImuCaptureController(
         imuPreintegrator.reset()
         previousFrameTimestampNs = 0L
         sensorManager.unregisterListener(this)
+        enqueueSessionMetadataWrite()
         sensorThread?.quitSafely()
         sensorThread = null
         sensorHandler = null
@@ -190,6 +222,8 @@ class CameraImuCaptureController(
             }
 
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            activeCameraId = cameraId
+            activeCameraCharacteristics = characteristics
             cameraTimestampSource = when (
                 characteristics.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
             ) {
@@ -197,6 +231,7 @@ class CameraImuCaptureController(
                 CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN -> "UNKNOWN"
                 else -> "UNKNOWN"
             }
+            enqueueSessionMetadataWrite()
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             if (map == null) {
                 publish("Camera does not expose stream configuration")
@@ -366,17 +401,21 @@ class CameraImuCaptureController(
 
     override fun onSensorChanged(event: SensorEvent) {
         val values = event.values
-        when (event.sensor.type) {
-            Sensor.TYPE_GYROSCOPE -> imuPreintegrator.addGyroscope(
-                event.timestamp, values.getOrElse(0) { 0f }, values.getOrElse(1) { 0f }, values.getOrElse(2) { 0f }
-            )
-            Sensor.TYPE_ACCELEROMETER -> imuPreintegrator.addAccelerometer(
-                event.timestamp, values.getOrElse(0) { 0f }, values.getOrElse(1) { 0f }, values.getOrElse(2) { 0f }
-            )
-        }
         val x = values.getOrElse(0) { 0f }
         val y = values.getOrElse(1) { 0f }
         val z = values.getOrElse(2) { 0f }
+        when (event.sensor.type) {
+            Sensor.TYPE_GYROSCOPE -> {
+                if (gyroDiagnostics.record(event.timestamp, x, y, z)) {
+                    imuPreintegrator.addGyroscope(event.timestamp, x, y, z)
+                }
+            }
+            Sensor.TYPE_ACCELEROMETER -> {
+                if (accelDiagnostics.record(event.timestamp, x, y, z)) {
+                    imuPreintegrator.addAccelerometer(event.timestamp, x, y, z)
+                }
+            }
+        }
         logCsvFields("IMU", event.timestamp, null, null, null, null, null, null, event.sensor.type, x, y, z, null, null, null, null, null, cameraTimestampSource)
         when (event.sensor.type) {
             Sensor.TYPE_GYROSCOPE -> lastGyro = values.copyOf()
@@ -413,6 +452,13 @@ class CameraImuCaptureController(
         val delta = latestGyroDelta
         val accelDelta = latestAccelDelta
         val gravity = imuPreintegrator.gravityEstimate()
+        val gyroHealth = gyroDiagnostics.snapshot()
+        val accelHealth = accelDiagnostics.snapshot()
+        val cameraCalibrationStatus = when {
+            activeCameraCharacteristics == null -> "camera metadata unavailable"
+            activeCameraCharacteristics?.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION) != null -> "intrinsics available"
+            else -> "intrinsics not reported by device"
+        }
         val snapshot = CaptureStats(
             status = status,
             frameCount = frameCount,
@@ -436,10 +482,36 @@ class CameraImuCaptureController(
             accelDeltaVelocity = vector(accelDelta.velocityX, accelDelta.velocityY, accelDelta.velocityZ),
             accelDeltaPosition = vector(accelDelta.positionX, accelDelta.positionY, accelDelta.positionZ),
             accelDeltaValid = accelDelta.valid,
-            gravityEstimate = if (gravity.valid) vector(gravity.x, gravity.y, gravity.z) else "unavailable"
+            gravityEstimate = if (gravity.valid) vector(gravity.x, gravity.y, gravity.z) else "unavailable",
+            gyroRateHz = String.format(Locale.US, "%.1f", gyroHealth.estimatedRateHz),
+            accelRateHz = String.format(Locale.US, "%.1f", accelHealth.estimatedRateHz),
+            gyroMaxGapMs = String.format(Locale.US, "%.1f", gyroHealth.maxIntervalMs),
+            accelMaxGapMs = String.format(Locale.US, "%.1f", accelHealth.maxIntervalMs),
+            cameraCalibrationStatus = cameraCalibrationStatus
         )
         mainHandler.post { onStats(snapshot) }
     }
+
+    private fun enqueueSessionMetadataWrite() {
+        val file = sessionMetadataFile ?: return
+        val json = SessionMetadataWriter.create(
+            context = context,
+            startedAtUnixMs = sessionStartedAtUnixMs,
+            cameraId = activeCameraId,
+            characteristics = activeCameraCharacteristics,
+            gyro = gyroSensor,
+            accelerometer = accelerometerSensor,
+            gyroDiagnostics = gyroDiagnostics.snapshot(),
+            accelDiagnostics = accelDiagnostics.snapshot()
+        )
+        loggerHandler?.post {
+            try {
+                SessionMetadataWriter.writeAtomically(file, json)
+            } catch (_: Exception) { }
+        }
+    }
+
+    private fun writeSessionMetadata() = enqueueSessionMetadataWrite()
 
     private fun format(value: Float): String = String.format(Locale.US, "%.3f", value)
 
