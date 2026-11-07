@@ -240,7 +240,7 @@ class CameraImuCaptureController(
                             }
                             previousFrameTimestampNs = frameTimestamp
 
-                            logCsv("FRAME,$frameTimestamp,${image.width},${image.height},$latestFeatures,$latestTracked,$latestMotionX,$latestMotionY,,,,,,,,,,$cameraTimestampSource")
+                            logCsv("FRAME,$frameTimestamp,${image.width},${image.height},$latestFeatures,$latestTracked,$latestMotionX,$latestMotionY,,,,,,,,,,,$cameraTimestampSource")
                             publishThrottled(
                                 if (cameraTimestampSource == "REALTIME") "Camera + IMU timing active"
                                 else "Camera active — IMU fusion unavailable (unknown timestamp source)"
