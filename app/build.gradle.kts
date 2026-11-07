@@ -33,9 +33,6 @@ android {
     }
 
     buildTypes {
-        debug {
-            isMinifyEnabled = false
-        }
         release {
             // Optimized, installable test build. Replace debug signing with a protected
             // release keystore before publishing to users or Play Store.
@@ -50,6 +47,13 @@ android {
     }
 }
 
+androidComponents {
+    // This project produces Release APKs only; do not configure or build Debug variants.
+    beforeVariants(selector().withBuildType("debug")) {
+        enable = false
+    }
+}
+
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
     implementation("androidx.activity:activity-compose:1.8.2")
@@ -58,5 +62,4 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    debugImplementation("androidx.compose.ui:ui-tooling")
 }
