@@ -1,22 +1,28 @@
 # Session replay and deterministic diagnostics
 
-Each capture stores a CSV event stream and a JSON sidecar under the app-private `files/sessions` directory. The replay analyzer reads the CSV as an immutable event log and derives repeatable stream summaries.
+Each capture stores a CSV event stream and a JSON metadata sidecar under the app-private `files/sessions` directory. When capture stops, the logger drains queued CSV writes, closes the CSV, and then creates a third file named `capture-<timestamp>.replay.json`.
 
-## Integrity contract
+## Streaming analysis
 
-The CSV header is checked against the exact 27-field schema emitted by the capture controller. Rows must have exactly 27 fields, known record types, positive nanosecond timestamps, and strictly increasing timestamps independently for camera frames, each IMU sensor type, gyro deltas, and acceleration deltas. Unknown record types are rejected instead of silently ignored.
+Replay analysis and CSV validation share a single incremental pass over the event stream. The analyzer does not call `toList()`, retain CSV rows, or reopen the input sequence. It keeps only per-stream counters, first/last timestamps, maximum gaps, and a small set of observed camera clock labels. Memory use is therefore bounded by the number of streams rather than the recording duration.
 
-## Replay summaries
+The report JSON is intended for later tooling and Basalt ingestion preflight. It includes:
+- Camera, gyroscope, and accelerometer sample counts, time ranges, estimated rates, and maximum gaps.
+- Camera timestamp-source consistency.
+- CSV schema and integrity counters, including malformed, invalid, out-of-order, and unsupported rows.
+- Replay-readiness result and human-readable warnings.
 
-The analyzer reports sample counts, first/last timestamps, stream duration, estimated sample rate and maximum inter-sample gap for camera frames, gyroscope, and accelerometer. It also checks that camera frames consistently report a single timestamp source.
+The CSV header is checked against the exact 27-field schema emitted by the capture controller. Rows must have exactly 27 fields, known record types, positive nanosecond timestamps, and strictly increasing timestamps independently for camera frames, each supported IMU sensor type, gyro deltas, and acceleration deltas. Unknown record types and unsupported IMU sensor IDs are rejected.
+
+## Replay screening rules
 
 A replay is marked **ready for a future VIO ingestion stage** only when:
 - CSV integrity checks pass.
 - At least two camera frames and two samples from each required IMU stream exist.
-- Camera timestamps are explicitly marked REALTIME.
+- Camera frames consistently report REALTIME timestamps.
 - Camera gaps do not exceed 100 ms and IMU gaps do not exceed 50 ms.
 
-These thresholds are conservative dataset screening rules, not universal sensor limits. A failed readiness check does not discard the capture; it identifies why the data should not be fed to a VIO backend without review.
+These thresholds are conservative dataset screening rules, not universal sensor limits. A failed readiness check does not discard the capture; it identifies why the data should be reviewed before VIO ingestion.
 
 ## Important distinction
 

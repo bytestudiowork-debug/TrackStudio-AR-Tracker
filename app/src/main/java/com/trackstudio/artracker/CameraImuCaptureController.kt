@@ -195,17 +195,27 @@ class CameraImuCaptureController(
         cameraThread?.quitSafely()
         cameraThread = null
         cameraHandler = null
+        val completedCsv = sessionLogFile
+        val replayReport = completedCsv?.let { File(it.parentFile, it.nameWithoutExtension + ".replay.json") }
         loggerHandler?.post {
             try {
                 sessionWriter?.flush()
                 sessionWriter?.close()
                 sessionWriter = null
-            } catch (_: Exception) { }
+                if (completedCsv != null && completedCsv.isFile && replayReport != null) {
+                    val report = completedCsv.bufferedReader().use { reader ->
+                        SessionReplayAnalyzer.analyze(reader.lineSequence())
+                    }
+                    SessionReplayReportWriter.writeAtomically(replayReport, report)
+                }
+            } catch (error: Exception) {
+                // The original CSV and metadata remain available even if report generation fails.
+            }
         }
         loggerThread?.quitSafely()
         loggerThread = null
         loggerHandler = null
-        publish("Capture stopped — session data saved")
+        publish("Capture stopped — session data saved; replay report queued")
     }
 
     private fun openCameraIfReady() {

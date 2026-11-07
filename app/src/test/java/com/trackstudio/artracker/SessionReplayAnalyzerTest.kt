@@ -60,4 +60,34 @@ class SessionReplayAnalyzerTest {
         assertTrue(report.warnings.any { it.contains("Gyroscope stream") })
         assertTrue(report.warnings.any { it.contains("Accelerometer stream") })
     }
+
+    @Test fun consumesOneShotSequenceWithoutMaterializingOrReopeningIt() {
+        var iteratorRequested = false
+        val oneShot = Sequence {
+            check(!iteratorRequested) { "Analyzer requested a second iterator" }
+            iteratorRequested = true
+            listOf(
+                header,
+                row("FRAME", 1_000_000_000),
+                row("FRAME", 1_033_000_000),
+                row("IMU", 1_000_000_000, "4"),
+                row("IMU", 1_010_000_000, "4"),
+                row("IMU", 1_000_000_000, "1"),
+                row("IMU", 1_010_000_000, "1")
+            ).iterator()
+        }
+        val report = SessionReplayAnalyzer.analyze(oneShot)
+        assertTrue(iteratorRequested)
+        assertEquals(2L, report.frameStream.samples)
+        assertTrue(report.validation.isValid)
+    }
+
+    @Test fun rejectsMixedCameraTimestampDomains() {
+        val report = SessionReplayAnalyzer.analyze(sequenceOf(
+            header, row("FRAME", 1_000_000_000, clock = "REALTIME"),
+            row("FRAME", 1_033_000_000, clock = "UNKNOWN")
+        ))
+        assertEquals("UNKNOWN", report.cameraTimestampSource)
+        assertFalse(report.replayReadyForVio)
+    }
 }

@@ -2,6 +2,7 @@ package com.trackstudio.artracker
 
 /**
  * Computes deterministic replay diagnostics from a completed capture CSV.
+ * Consumes the input exactly once and retains only stream counters, not the capture rows.
  * This summarizes recorded measurements; it does not reconstruct poses or certify calibration.
  */
 internal object SessionReplayAnalyzer {
@@ -44,7 +45,9 @@ internal object SessionReplayAnalyzer {
             val start = first
             val end = last
             val durationNs = if (start != null && end != null) (end - start).coerceAtLeast(0) else 0
-            val rate = if (durationNs > 0 && count > 1) (count - 1) * 1_000_000_000.0 / durationNs else 0.0
+            val rate = if (durationNs > 0 && count > 1) {
+                (count - 1) * 1_000_000_000.0 / durationNs
+            } else 0.0
             return StreamSummary(
                 count, start, end, durationNs / 1_000_000.0, rate, maxGapNs / 1_000_000.0
             )
@@ -52,32 +55,28 @@ internal object SessionReplayAnalyzer {
     }
 
     fun analyze(lines: Sequence<String>): Report {
-        val materialized = lines.toList()
-        val validation = SessionCsvValidator.validate(materialized.asSequence())
+        val validator = SessionCsvValidator.Accumulator()
         val frames = MutableStream()
         val gyros = MutableStream()
         val accelerometers = MutableStream()
         val timestampSources = linkedSetOf<String>()
 
-        if (validation.headerValid) {
-            materialized.drop(1).forEach { line ->
-                if (line.isBlank()) return@forEach
-                val fields = line.split(',')
-                if (fields.size != SessionCsvValidator.EXPECTED_COLUMN_COUNT) return@forEach
-                val timestamp = fields[1].toLongOrNull()?.takeIf { it > 0L } ?: return@forEach
-                when (fields[0]) {
-                    "FRAME" -> {
-                        frames.add(timestamp)
-                        fields.getOrNull(17)?.takeIf { it.isNotBlank() }?.let(timestampSources::add)
-                    }
-                    "IMU" -> when (fields[8]) {
-                        "4" -> gyros.add(timestamp) // Android Sensor.TYPE_GYROSCOPE
-                        "1" -> accelerometers.add(timestamp) // Android Sensor.TYPE_ACCELEROMETER
-                    }
+        for (line in lines) {
+            val fields = validator.accept(line) ?: continue
+            val timestamp = fields[1].toLongOrNull() ?: continue
+            when (fields[0]) {
+                "FRAME" -> {
+                    frames.add(timestamp)
+                    fields[17].takeIf { it.isNotBlank() }?.let(timestampSources::add)
+                }
+                "IMU" -> when (fields[8]) {
+                    "4" -> gyros.add(timestamp) // Android Sensor.TYPE_GYROSCOPE
+                    "1" -> accelerometers.add(timestamp) // Android Sensor.TYPE_ACCELEROMETER
                 }
             }
         }
 
+        val validation = validator.finish()
         val frameSummary = frames.snapshot()
         val gyroSummary = gyros.snapshot()
         val accelSummary = accelerometers.snapshot()
