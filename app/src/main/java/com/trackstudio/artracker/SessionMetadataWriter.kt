@@ -141,7 +141,7 @@ internal object SessionMetadataWriter {
         .put("gapsOver50ms", s.longGapCount)
         .put("lastTimestampNs", s.lastTimestampNs)
 
-    private fun sizeJson(size: Size?): JSONObject =
+    private fun sizeJson(size: Size?): Any =
         size?.let { JSONObject().put("width", it.width).put("height", it.height) } ?: JSONObject.NULL
 
     private fun floatArrayJson(values: FloatArray?): JSONArray? {
