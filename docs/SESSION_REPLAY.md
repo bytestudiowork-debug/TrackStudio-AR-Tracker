@@ -27,3 +27,8 @@ These thresholds are conservative dataset screening rules, not universal sensor 
 ## Important distinction
 
 Replay readiness is not a calibration result and is not proof of metric accuracy. The current app still does not estimate camera-to-IMU spatial extrinsics, IMU bias/noise calibration, gravity-compensated world motion, or camera pose. The current accelerometer integration remains diagnostic only. Basalt is not integrated by this milestone.
+
+
+## Camera frame archive
+
+Each capture also contains a `.basalt.frames` TSBF v1 archive with lossless timestamped GRAY8 frames. The archive uses a bounded asynchronous writer, per-frame CRC32, monotonic timestamp checks and a footer with written/dropped counts. `BasaltFrameArchiveReader` validates the container and streams frames without loading the complete recording into memory. This is not yet a Basalt runtime adapter; it provides the missing image side of a future offline replay dataset.

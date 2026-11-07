@@ -24,12 +24,13 @@ The current upstream CMake project is not yet demonstrated to build as an Androi
 
 Already available:
 - Camera2 analysis frames with a packed luma crop and frame timestamps.
+- A lossless `TSBF` grayscale frame archive for each capture. Records contain timestamp, dimensions, GRAY8 bytes compressed with DEFLATE and CRC32; the footer records written/dropped counts. The writer uses a bounded queue and never blocks Camera2 for disk I/O.
 - Raw Android gyroscope values (rad/s) and accelerometer values (m/s²) with SensorEvent timestamps.
 - Camera/IMU fusion is conservatively allowed only when Camera2 reports the REALTIME timestamp source.
 - Camera metadata, stream crop/stride information and sensor timing diagnostics are written to session metadata.
 
 Still missing before a real Basalt run:
-- Persisted camera image frames. Current captures log frame diagnostics and optical-flow statistics, not the actual images required for offline VIO replay.
+- An offline replay adapter that connects the TSBF frame archive and raw IMU CSV stream to Basalt's public optical-flow and estimator queues.
 - A validated camera model transformed into the exact cropped/resized analysis-frame coordinate system.
 - Measured camera-to-IMU spatial extrinsics.
 - Gyroscope/accelerometer bias and noise-density/random-walk calibration.
@@ -40,11 +41,10 @@ Do not pass TrackStudio's prototype gravity-subtracted acceleration or approxima
 ## Integration sequence
 
 1. Keep the upstream submodule pristine and pinned; verify its nested dependency pins and license inventory.
-2. Add bounded, timestamped camera-frame recording alongside the existing raw IMU capture. Preserve the actual analysis crop and pixel format.
-3. Add an offline replay adapter outside the Basalt source tree. Validate timestamp order, camera model, sensor units and calibration before starting the estimator.
-4. Build Basalt as an isolated Android arm64 native dependency with a separate CMake toolchain/wrapper. Keep the app's existing CMake 3.22.1 path and armeabi-v7a fallback independent until supported.
-5. Connect the adapter to the Basalt public API without editing Basalt source. Add deterministic dataset tests and verify the exact upstream commit in CI.
-6. Only then enable live Camera2/SensorManager streaming into Basalt and benchmark on physical entry-, mid- and flagship devices.
+2. Connect the TSBF frame reader and raw IMU CSV stream to an offline replay adapter outside the Basalt source tree. Validate timestamp order, camera model, sensor units and calibration before starting the estimator.
+3. Build Basalt as an isolated Android arm64 native dependency with a separate CMake toolchain/wrapper. Keep the app's existing CMake 3.22.1 path and armeabi-v7a fallback independent until supported.
+4. Connect the adapter to Basalt's public API without editing Basalt source. Add deterministic dataset tests and verify the exact upstream commit in CI.
+5. Only then enable live Camera2/SensorManager streaming into Basalt and benchmark on physical entry-, mid- and flagship devices.
 
 ## License gate
 
@@ -54,6 +54,7 @@ Basalt's top-level source is BSD-3-Clause. That does not automatically license e
 
 - Upstream source: pinned, unmodified submodule.
 - App build: remains independent and unchanged by the Basalt source pin.
+- Timestamped camera frame archive: implemented and unit-tested in the current milestone; offline Basalt adapter not connected yet.
 - Android Basalt library: not built yet.
 - JNI/runtime VIO: not connected yet.
 - Physical-device VIO accuracy: not tested.
