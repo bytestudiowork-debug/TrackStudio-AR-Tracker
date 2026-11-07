@@ -24,19 +24,27 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure preinstalled Android SDK
+        run: |
+          SDK_ROOT="/usr/local/lib/android/sdk"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n1)"
+          test -x "$SDKMANAGER"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          yes | "$SDKMANAGER" --licenses
 
       - name: Install pinned Android NDK and Ninja
         run: |
-          sdkmanager "ndk;27.0.12077973"
+          SDKMANAGER="$(command -v sdkmanager)"
+          "$SDKMANAGER" "ndk;27.0.12077973"
           sudo apt-get update
           sudo apt-get install -y ninja-build
 
       - name: Configure build tools
         run: |
           echo "VCPKG_ROOT=$GITHUB_WORKSPACE/third_party/basalt/thirdparty/vcpkg" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
           cmake --version
           ninja --version
 
