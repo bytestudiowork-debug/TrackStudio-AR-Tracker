@@ -31,6 +31,23 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    buildTypes {
+        debug {
+            isMinifyEnabled = false
+        }
+        release {
+            // Optimized, installable test build. Replace debug signing with a protected
+            // release keystore before publishing to users or Play Store.
+            signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
 }
 
 dependencies {
