@@ -85,6 +85,10 @@ class CameraImuCaptureController(
     private var accelerometerSensor: Sensor? = null
     private var sessionStartedAtUnixMs = 0L
     private var sessionMetadataFile: File? = null
+    private var frameArchiveFile: File? = null
+    private var frameArchiveWriter: BasaltFrameArchiveWriter? = null
+    @Volatile private var frameArchiveSnapshot: BasaltFrameArchiveWriter.Snapshot? = null
+    @Volatile private var frameArchiveStartError: String? = null
     private var activeCameraId: String? = null
     private var activeCameraCharacteristics: CameraCharacteristics? = null
 
@@ -149,6 +153,15 @@ class CameraImuCaptureController(
         val sessionStem = "capture-$sessionStartedAtUnixMs"
         sessionLogFile = File(logDir, "$sessionStem.csv")
         sessionMetadataFile = File(logDir, "$sessionStem.json")
+        frameArchiveFile = File(logDir, "$sessionStem.basalt.frames")
+        frameArchiveSnapshot = null
+        frameArchiveStartError = null
+        frameArchiveWriter = try {
+            BasaltFrameArchiveWriter(frameArchiveFile!!)
+        } catch (error: Exception) {
+            frameArchiveStartError = error.message ?: error.javaClass.simpleName
+            null
+        }
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         accelerometerSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         loggerHandler?.post {
@@ -187,14 +200,24 @@ class CameraImuCaptureController(
         imuPreintegrator.reset()
         previousFrameTimestampNs = 0L
         sensorManager.unregisterListener(this)
-        enqueueSessionMetadataWrite()
-        sensorThread?.quitSafely()
+        val sensorWorker = sensorThread
+        sensorWorker?.quitSafely()
+        if (sensorWorker != null && Thread.currentThread() !== sensorWorker) sensorWorker.join()
         sensorThread = null
         sensorHandler = null
+
         closeCamera()
-        cameraThread?.quitSafely()
+        val cameraWorker = cameraThread
+        cameraWorker?.quitSafely()
+        if (cameraWorker != null && Thread.currentThread() !== cameraWorker) cameraWorker.join()
         cameraThread = null
         cameraHandler = null
+
+        // All camera callbacks have drained before the archive is finalized.
+        frameArchiveSnapshot = frameArchiveWriter?.finish()
+        frameArchiveWriter = null
+        enqueueSessionMetadataWrite()
+
         val completedCsv = sessionLogFile
         val replayReport = completedCsv?.let { File(it.parentFile, it.nameWithoutExtension + ".replay.json") }
         loggerHandler?.post {
@@ -297,6 +320,10 @@ class CameraImuCaptureController(
                                 )
                                 enqueueSessionMetadataWrite()
                             }
+                            // A bounded asynchronous writer never stalls Camera2 or IMU sampling.
+                            frameArchiveWriter?.offer(
+                                frameTimestamp, packed.width, packed.height, packed.pixels
+                            )
                             val result = NativeFeatureTracker.processFrame(
                                 packed.pixels, packed.width, packed.height, packed.width, 1
                             )
@@ -537,7 +564,11 @@ class CameraImuCaptureController(
             gyroDiagnostics = gyroDiagnostics.snapshot(),
             accelDiagnostics = accelDiagnostics.snapshot(),
             frameDiagnostics = frameDiagnostics.snapshot(),
-            analysisStream = analysisStreamMetadata
+            analysisStream = analysisStreamMetadata,
+            frameArchiveFile = frameArchiveFile,
+            frameArchiveSnapshot = frameArchiveSnapshot,
+            frameArchiveRecording = frameArchiveWriter != null,
+            frameArchiveStartError = frameArchiveStartError
         )
         loggerHandler?.post {
             try {

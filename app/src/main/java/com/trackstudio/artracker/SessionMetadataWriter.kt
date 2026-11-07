@@ -27,10 +27,14 @@ internal object SessionMetadataWriter {
         gyroDiagnostics: SensorStreamDiagnostics.Snapshot,
         accelDiagnostics: SensorStreamDiagnostics.Snapshot,
         frameDiagnostics: CameraFrameDiagnostics.Snapshot,
-        analysisStream: CameraAnalysisStreamMetadata?
+        analysisStream: CameraAnalysisStreamMetadata?,
+        frameArchiveFile: File?,
+        frameArchiveSnapshot: BasaltFrameArchiveWriter.Snapshot?,
+        frameArchiveRecording: Boolean,
+        frameArchiveStartError: String?
     ): JSONObject {
         val root = JSONObject()
-            .put("schemaVersion", 2)
+            .put("schemaVersion", 3)
             .put("sessionStartedAtUnixMs", startedAtUnixMs)
             .put("app", JSONObject()
                 .put("applicationId", context.packageName)
@@ -51,6 +55,9 @@ internal object SessionMetadataWriter {
                 .put("accelerometer", diagnosticsJson(accelDiagnostics)))
             .put("cameraFrameDiagnostics", frameDiagnosticsJson(frameDiagnostics))
             .put("analysisStream", analysisStreamJson(analysisStream))
+            .put("basaltFrameArchive", frameArchiveJson(
+                frameArchiveFile, frameArchiveSnapshot, frameArchiveRecording, frameArchiveStartError
+            ))
 
         if (cameraId != null && characteristics != null) {
             root.put("camera", cameraJson(cameraId, characteristics))
@@ -162,6 +169,25 @@ internal object SessionMetadataWriter {
             .put("intrinsicsTransformApplied", false)
             .put("note", "Crop and plane layout describe the observed ImageReader frame. Camera2 intrinsics are retained in their native coordinate convention; no unverified transform is applied.")
     }
+
+    private fun frameArchiveJson(
+        file: File?,
+        snapshot: BasaltFrameArchiveWriter.Snapshot?,
+        recording: Boolean,
+        startError: String?
+    ) = JSONObject()
+        .put("available", file?.exists() == true)
+        .put("fileName", file?.name ?: JSONObject.NULL)
+        .put("format", "TSBF")
+        .put("formatVersion", BasaltFrameArchiveWriter.FORMAT_VERSION)
+        .put("pixelFormat", "GRAY8")
+        .put("compression", "DEFLATE")
+        .put("recording", recording)
+        .put("framesWritten", snapshot?.framesWritten ?: 0L)
+        .put("framesDropped", snapshot?.framesDropped ?: 0L)
+        .put("archiveComplete", snapshot?.complete ?: false)
+        .put("archiveBytes", snapshot?.archiveBytes ?: (file?.length() ?: 0L))
+        .put("error", snapshot?.error ?: startError ?: JSONObject.NULL)
 
     private fun diagnosticsJson(s: SensorStreamDiagnostics.Snapshot) = JSONObject()
         .put("acceptedSamples", s.acceptedSamples)
