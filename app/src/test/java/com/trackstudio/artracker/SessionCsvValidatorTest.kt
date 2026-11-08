@@ -7,7 +7,20 @@ class SessionCsvValidatorTest {
     private val header = SessionCsvValidator.EXPECTED_HEADER.joinToString(",")
     private fun row(type: String, timestamp: Long, sensor: String = ""): String {
         val f = MutableList(27) { "" }
-        f[0] = type; f[1] = timestamp.toString(); f[8] = sensor
+        f[0] = type
+        f[1] = timestamp.toString()
+        f[8] = sensor
+        when (type) {
+            "FRAME" -> {
+                f[2] = "1920"
+                f[3] = "1080"
+            }
+            "IMU" -> {
+                f[9] = "0.0"
+                f[10] = "0.0"
+                f[11] = "9.81"
+            }
+        }
         return f.joinToString(",")
     }
 
@@ -28,6 +41,19 @@ class SessionCsvValidatorTest {
     @Test fun detectsMalformedRowsAndInvalidTimestamps() {
         val r = SessionCsvValidator.validate(sequenceOf(header,"FRAME,100",row("IMU",0)))
         assertEquals(1L,r.malformedRows); assertEquals(1L,r.invalidTimestamps)
+        assertFalse(r.isValid)
+    }
+
+    @Test fun rejectsMissingFrameDimensionsAndNonFiniteRawImuVectors() {
+        val missingDimensions = row("FRAME", 100).split(",").toMutableList().also {
+            it[2] = ""
+            it[3] = ""
+        }.joinToString(",")
+        val nonFiniteImu = row("IMU", 110, "4").split(",").toMutableList().also {
+            it[10] = "NaN"
+        }.joinToString(",")
+        val r = SessionCsvValidator.validate(sequenceOf(header, missingDimensions, nonFiniteImu))
+        assertEquals(2L, r.malformedRows)
         assertFalse(r.isValid)
     }
 
