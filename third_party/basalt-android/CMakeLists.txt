@@ -33,3 +33,11 @@ set(BUILD_TESTS OFF CACHE BOOL "Do not build upstream tests in the Android app" 
 set(BUILD_TOOLS OFF CACHE BOOL "Do not build upstream desktop tools" FORCE)
 
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../basalt" basalt_upstream)
+
+# Upstream Basalt enables a warning suppression introduced in newer Clang.
+# NDK 27's Clang does not recognize that warning name; with upstream -Werror,
+# the unknown-warning diagnostic stops the build. Suppress only that diagnostic
+# for the Android Basalt target, without changing any upstream source or flags.
+if(TARGET basalt)
+    target_compile_options(basalt PRIVATE -Wno-unknown-warning-option)
+endif()
