@@ -259,10 +259,20 @@ class CameraImuCaptureController(
                 // The original CSV and metadata remain available even if report generation fails.
             }
         }
-        loggerThread?.quitSafely()
+        // Drain queued CSV, metadata, and replay-report writes before returning.
+        // Export can run immediately after stop(), so it must never race this worker.
+        val loggerWorker = loggerThread
+        loggerWorker?.quitSafely()
+        if (loggerWorker != null && Thread.currentThread() !== loggerWorker) {
+            try {
+                loggerWorker.join()
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
         loggerThread = null
         loggerHandler = null
-        publish("Capture stopped — session data saved; replay report queued")
+        publish("Capture stopped — session data finalized")
     }
 
     private fun openCameraIfReady() {
