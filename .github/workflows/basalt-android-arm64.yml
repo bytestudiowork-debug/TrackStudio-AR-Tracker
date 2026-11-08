@@ -1,13 +1,8 @@
 name: Basalt Android arm64 build spike
 
 on:
+  # This is an expensive native dependency build. Start it manually only.
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "third_party/basalt-android/**"
-      - "third_party/basalt"
-      - ".github/workflows/basalt-android-arm64.yml"
 
 permissions:
   contents: read
@@ -18,6 +13,7 @@ jobs:
     timeout-minutes: 90
     env:
       VCPKG_MAX_CONCURRENCY: 2
+      VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
     steps:
       - name: Checkout Basalt and its pinned dependency submodule
         uses: actions/checkout@v4
@@ -100,7 +96,7 @@ jobs:
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
-      - name: Build upstream Basalt shared library only
+      - name: Build Android Basalt VIO core shared library only
         run: cmake --build build/basalt-android-arm64 --target basalt --parallel 2
 
       - name: Verify arm64 output and collect minimal runtime closure
