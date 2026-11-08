@@ -90,3 +90,13 @@ endif()
 
 message(STATUS "Building Basalt VIO core only for Android arm64-v8a")
 message(STATUS "Excluded: desktop GUI/tools, calibration apps, dataset readers, ROSbag, and tests")
+
+# TrackStudio-owned JNI smoke bridge. Keep this adapter outside the upstream
+# Basalt submodule; it deliberately does not start VIO until calibrated replay
+# and estimator lifecycle handling are implemented and tested.
+add_library(trackstudio_basalt_jni SHARED
+    "${CMAKE_CURRENT_LIST_DIR}/basalt_jni_adapter.cpp"
+)
+target_compile_features(trackstudio_basalt_jni PRIVATE cxx_std_17)
+target_compile_options(trackstudio_basalt_jni PRIVATE -O3 -fno-exceptions -fno-rtti)
+target_link_libraries(trackstudio_basalt_jni PRIVATE basalt)
