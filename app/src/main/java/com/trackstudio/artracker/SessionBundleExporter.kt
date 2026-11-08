@@ -28,7 +28,7 @@ internal object SessionBundleExporter {
         val metadata = File(sessionsDirectory, "$stem.json")
         val frames = File(sessionsDirectory, "$stem.basalt.frames")
         val required = listOf(csv, metadata, frames, report)
-        val missing = required.filterNot { it.isFile || it.length() > 0L }
+        val missing = required.filterNot { it.isFile && it.length() > 0L }
         if (missing.isNotEmpty()) {
             throw IllegalStateException("Capture bundle is incomplete: ${missing.joinToString { it.name }}")
         }
