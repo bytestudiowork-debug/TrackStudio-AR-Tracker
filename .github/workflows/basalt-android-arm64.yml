@@ -226,10 +226,59 @@ jobs:
           print("Runtime bundle: " + ", ".join(sorted(copied)), flush=True)
           PY
 
+      - name: Add and verify TrackStudio JNI adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          LLVM_READELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          JNI_LIB="$GITHUB_WORKSPACE/build/basalt-android-arm64/libtrackstudio_basalt_jni.so"
+          test -f "$JNI_LIB"
+          "$LLVM_READELF" -h "$JNI_LIB" | grep -q "AArch64"
+          "$LLVM_READELF" -d "$JNI_LIB" | grep -q "libbasalt.so"
+          cp "$JNI_LIB" "$GITHUB_WORKSPACE/basalt-android-arm64-artifact/"
+          echo "Verified JNI adapter has an AArch64 ELF header and a runtime dependency on libbasalt.so."
+
       - name: Upload isolated Basalt arm64 build
         uses: actions/upload-artifact@v4
         with:
           name: basalt-android-arm64-spike
           path: basalt-android-arm64-artifact/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Set up JDK 17 for Android APK packaging
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle with dependency cache
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.6"
+          cache-provider: basic
+
+      - name: Package Basalt runtime and JNI adapter into Android app
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          cp basalt-android-arm64-artifact/*.so app/src/main/jniLibs/arm64-v8a/
+          echo "Packaged ARM64 native libraries:"
+          find app/src/main/jniLibs/arm64-v8a -maxdepth 1 -type f -name '*.so' -printf '%f\\n' | sort
+          test -f app/src/main/jniLibs/arm64-v8a/libtrackstudio_basalt_jni.so
+          test -f app/src/main/jniLibs/arm64-v8a/libbasalt.so
+
+      - name: Run Android unit tests with Basalt bridge present
+        run: gradle testReleaseUnitTest --no-daemon --stacktrace
+
+      - name: Build Android Release APK with Basalt JNI
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Upload Basalt-enabled Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrackStudio-AR-Tracker-basalt-arm64-release
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14
