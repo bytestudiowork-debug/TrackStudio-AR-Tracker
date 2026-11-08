@@ -11,6 +11,17 @@ class SessionReplayAnalyzerTest {
         fields[1] = timestamp.toString()
         fields[8] = sensor
         fields[17] = clock
+        when (type) {
+            "FRAME" -> {
+                fields[2] = "1920"
+                fields[3] = "1080"
+            }
+            "IMU" -> {
+                fields[9] = "0.0"
+                fields[10] = "0.0"
+                fields[11] = "9.81"
+            }
+        }
         return fields.joinToString(",")
     }
 
