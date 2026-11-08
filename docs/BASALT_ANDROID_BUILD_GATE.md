@@ -30,7 +30,8 @@ Already available:
 - Camera metadata, stream crop/stride information and sensor timing diagnostics are written to session metadata.
 
 Still missing before a real Basalt run:
-- An offline replay adapter that connects the TSBF frame archive and raw IMU CSV stream to Basalt's public optical-flow and estimator queues.
+- The strict TSBF/CSV replay preflight is now implemented in TrackStudio code. It verifies archive integrity, frame count, exact frame timestamp alignment, stable dimensions, and the CSV timing screen before a native adapter may consume a session.
+- The native replay adapter that converts GRAY8 frames to Basalt's uint16 image convention and submits timestamped raw IMU samples to Basalt's public queues is still not connected.
 - A validated camera model transformed into the exact cropped/resized analysis-frame coordinate system.
 - Measured camera-to-IMU spatial extrinsics.
 - Gyroscope/accelerometer bias and noise-density/random-walk calibration.
@@ -54,9 +55,10 @@ Basalt's top-level source is BSD-3-Clause. That does not automatically license e
 
 - Upstream source: pinned, unmodified submodule.
 - App build: remains independent and unchanged by the Basalt source pin.
-- Timestamped camera frame archive: implemented and unit-tested in the current milestone; offline Basalt adapter not connected yet.
-- Android Basalt library: not built yet.
-- JNI/runtime VIO: not connected yet.
+- Timestamped camera frame archive: implemented; strict CSV/archive preflight and deterministic tests have been added. The new preflight tests have not yet been run in CI.
+- Android Basalt arm64 shared library: successfully built and packaged in workflow run 42461094919 (commit 60587f9); artifact includes the runtime dependency closure.
+- JNI/runtime VIO: not connected yet; the app still uses its existing feature-tracking diagnostics, not Basalt.
+- Build cache: vcpkg archives, installed packages and the CMake/Ninja build tree are cached. The first cache was saved successfully; a subsequent exact-key restore has not yet been demonstrated.
 - Physical-device VIO accuracy: not tested.
 
 This separation is deliberate: it prevents an unverified desktop dependency graph from breaking the working Android release while keeping the exact upstream implementation available for integration.
@@ -66,7 +68,7 @@ This separation is deliberate: it prevents an unverified desktop dependency grap
 
 The isolated wrapper is in `third_party/basalt-android`; it is outside the upstream submodule. It uses the pinned upstream vcpkg baseline and the upstream overlay ports, but omits the optional RealSense device package because the Android capture source is Camera2. The wrapper sets an explicit `armv8-a` target and disables upstream's Unix fully-static executable-link option. It supplies a tiny Pangolin package-config shim because Pangolin is used by Basalt's desktop tools, not by the `basalt` shared-library target; those desktop executables are configured but never built in this Android spike. This avoids cross-building a desktop GUI stack. It does not edit or patch Basalt source.
 
-The `Basalt Android arm64 build spike` workflow recursively checks out the pinned Basalt and vcpkg submodules, installs the Android NDK 27.0.12077973, resolves the wrapper's dependency manifest, and builds only the upstream `basalt` shared-library target. If successful, it verifies the ELF architecture and uploads `libbasalt.so` plus `libc++_shared.so`. This is an isolated build artifact, not yet packaged into the app.
+The `Basalt Android arm64 build spike` workflow recursively checks out the pinned Basalt and vcpkg submodules, installs the Android NDK 27.0.12077973, resolves the wrapper's dependency manifest, and builds only the upstream `basalt` shared-library target. The successful run verifies the ELF architecture, resolves the shared-library dependency closure, and uploads the isolated Basalt runtime bundle. This is an isolated build artifact, not yet packaged into the app. The workflow caches vcpkg archives, the installed target packages and the CMake/Ninja build directory; it remains manual-only to avoid accidental long builds.
 
 ## Upstream runtime API boundary
 
@@ -85,5 +87,6 @@ Basalt's `ImageData` uses `ManagedImage<uint16_t>`. Its EuRoC loader expands an 
 - Upstream source and nested vcpkg source are pinned and verified clean.
 - TrackStudio records timestamped grayscale frames and raw IMU events.
 - Archive reader/writer and integrity tests are implemented.
-- Android arm64 Basalt build workflow is added; its result is pending.
+- Android arm64 Basalt library build completed successfully in run 42461094919.
+- Replay preflight now cross-checks the CSV and TSBF archive, including frame timestamps and dimensions; it does not run Basalt.
 - JNI queues, calibrated camera model/extrinsics, live VIO output and device benchmarks remain future gates.
