@@ -12,7 +12,7 @@ on:
 
 concurrency:
   group: basalt-arm64-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -127,7 +127,7 @@ jobs:
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
       - name: Build Android Basalt VIO core shared library only
-        run: cmake --build build/basalt-android-arm64 --target basalt --parallel 2
+        run: cmake --build build/basalt-android-arm64 --target basalt trackstudio_basalt_jni --parallel 2
 
       - name: Verify arm64 output and collect minimal runtime closure
         shell: bash
