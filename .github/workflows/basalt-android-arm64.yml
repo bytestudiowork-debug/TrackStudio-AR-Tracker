@@ -62,7 +62,7 @@ jobs:
           PORTFILE="$VCPKG_ROOT/ports/opencv4/portfile.cmake"
           grep -q -- '-DWITH_CPUFEATURES=${WITH_CPUFEATURES}' "$PORTFILE"
           if ! grep -q -- '-DWITH_KLEIDICV=OFF' "$PORTFILE"; then
-            sed -i '/-DWITH_CPUFEATURES=${WITH_CPUFEATURES}/a\        -DWITH_KLEIDICV=OFF # Android NDK 27 compatibility: use OpenCV's standard NEON kernels' "$PORTFILE"
+            sed -i '/-DWITH_CPUFEATURES=${WITH_CPUFEATURES}/a\        -DWITH_KLEIDICV=OFF # Android NDK 27 compatibility: use OpenCV standard NEON kernels' "$PORTFILE"
           fi
           grep -n -- '-DWITH_KLEIDICV=OFF' "$PORTFILE"
 
