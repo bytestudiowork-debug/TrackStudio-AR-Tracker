@@ -20,6 +20,15 @@ internal object BasaltReplayPreflight {
                 cameraToImuExtrinsicsCalibrated &&
                 gyroBiasAndNoiseCalibrated &&
                 accelerometerBiasAndNoiseCalibrated
+
+        companion object {
+            fun from(profile: BasaltCalibrationProfile) = CalibrationGate(
+                cameraModelValidatedForAnalysisStream = profile.cameraModelValid,
+                cameraToImuExtrinsicsCalibrated = profile.extrinsicsValid,
+                gyroBiasAndNoiseCalibrated = profile.gyroCalibrationValid,
+                accelerometerBiasAndNoiseCalibrated = profile.accelerometerCalibrationValid
+            )
+        }
     }
 
     data class Report(
