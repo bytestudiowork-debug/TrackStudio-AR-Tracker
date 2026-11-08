@@ -26,6 +26,8 @@ internal object BasaltReplayPreflight {
         val csv: SessionReplayAnalyzer.Report,
         val archive: BasaltFrameArchiveReader.Summary?,
         val frameTimestampsMatch: Boolean,
+        val frameDimensionsMatch: Boolean,
+        val frameDimensionsStable: Boolean,
         val calibrationComplete: Boolean,
         val readyForNativeVio: Boolean,
         val warnings: List<String>
@@ -42,11 +44,15 @@ internal object BasaltReplayPreflight {
         val warnings = csvReport.warnings.toMutableList()
         var archiveSummary: BasaltFrameArchiveReader.Summary? = null
         var timestampsMatch = false
+        var dimensionsMatch = false
+        var dimensionsStable = false
 
         try {
-            val comparison = compareFrameTimestamps(csvFile, frameArchiveFile)
-            archiveSummary = comparison.first
-            timestampsMatch = comparison.second
+            val comparison = compareFrameRecords(csvFile, frameArchiveFile)
+            archiveSummary = comparison.summary
+            timestampsMatch = comparison.timestampsMatch
+            dimensionsMatch = comparison.dimensionsMatch
+            dimensionsStable = comparison.dimensionsStable
             if (archiveSummary.framesDropped != 0L) {
                 warnings += "The frame archive dropped ${archiveSummary.framesDropped} camera frames."
             }
@@ -55,6 +61,12 @@ internal object BasaltReplayPreflight {
             }
             if (!timestampsMatch) {
                 warnings += "CSV camera timestamps and archived frame timestamps do not match."
+            }
+            if (!dimensionsMatch) {
+                warnings += "CSV camera frame dimensions and archived frame dimensions do not match."
+            }
+            if (!dimensionsStable) {
+                warnings += "Archived camera frame dimensions change within the session."
             }
         } catch (error: IOException) {
             warnings += "Frame archive validation failed: ${error.message ?: "invalid archive"}"
@@ -76,29 +88,50 @@ internal object BasaltReplayPreflight {
         val archiveValid = archiveSummary != null &&
             archiveSummary.framesDropped == 0L &&
             archiveSummary.frameCount == csvReport.frameStream.samples &&
-            timestampsMatch
+            timestampsMatch && dimensionsMatch && dimensionsStable
         val ready = csvReport.replayReadyForVio && archiveValid && calibration.complete
         return Report(
             csv = csvReport,
             archive = archiveSummary,
             frameTimestampsMatch = timestampsMatch,
+            frameDimensionsMatch = dimensionsMatch,
+            frameDimensionsStable = dimensionsStable,
             calibrationComplete = calibration.complete,
             readyForNativeVio = ready,
             warnings = warnings.distinct()
         )
     }
 
-    private fun compareFrameTimestamps(
+    private data class CsvFrame(
+        val timestampNs: Long?,
+        val width: Int?,
+        val height: Int?
+    )
+
+    private data class FrameComparison(
+        val summary: BasaltFrameArchiveReader.Summary,
+        val timestampsMatch: Boolean,
+        val dimensionsMatch: Boolean,
+        val dimensionsStable: Boolean
+    )
+
+    private fun compareFrameRecords(
         csvFile: File,
         archiveFile: File
-    ): Pair<BasaltFrameArchiveReader.Summary, Boolean> {
-        fun advanceCsvFrame(source: BufferedReader): Long? {
+    ): FrameComparison {
+        fun advanceCsvFrame(source: BufferedReader): CsvFrame? {
             while (true) {
                 val line = source.readLine() ?: return null
                 val fields = line.split(',')
                 if (fields.size == SessionCsvValidator.EXPECTED_COLUMN_COUNT &&
                     fields[0] == "FRAME"
-                ) return fields[1].toLongOrNull()
+                ) {
+                    return CsvFrame(
+                        fields[1].toLongOrNull(),
+                        fields[2].toIntOrNull(),
+                        fields[3].toIntOrNull()
+                    )
+                }
             }
         }
 
@@ -108,20 +141,40 @@ internal object BasaltReplayPreflight {
                 throw IOException("Unexpected session CSV header")
             }
 
-            var nextCsvFrameTimestamp = advanceCsvFrame(reader)
+            var nextCsvFrame = advanceCsvFrame(reader)
             var csvExhausted = false
-            var matches = true
+            var timestampsMatch = true
+            var dimensionsMatch = true
+            var dimensionsStable = true
+            var firstDimensions: Pair<Int, Int>? = null
+
             val summary = BasaltFrameArchiveReader.read(archiveFile) { frame ->
                 if (csvExhausted) {
-                    matches = false
+                    timestampsMatch = false
+                    dimensionsMatch = false
                 } else {
-                    if (nextCsvFrameTimestamp != frame.timestampNs) matches = false
-                    nextCsvFrameTimestamp = advanceCsvFrame(reader)
-                    if (nextCsvFrameTimestamp == null) csvExhausted = true
+                    if (nextCsvFrame?.timestampNs != frame.timestampNs) timestampsMatch = false
+                    if (nextCsvFrame?.width != frame.width || nextCsvFrame?.height != frame.height) {
+                        dimensionsMatch = false
+                    }
+                    val currentDimensions = frame.width to frame.height
+                    if (firstDimensions == null) firstDimensions = currentDimensions
+                    else if (firstDimensions != currentDimensions) dimensionsStable = false
+
+                    nextCsvFrame = advanceCsvFrame(reader)
+                    if (nextCsvFrame == null) csvExhausted = true
                 }
             }
-            if (nextCsvFrameTimestamp != null) matches = false
-            return summary to (matches && nextCsvFrameTimestamp == null)
+            if (nextCsvFrame != null) {
+                timestampsMatch = false
+                dimensionsMatch = false
+            }
+            return FrameComparison(
+                summary,
+                timestampsMatch && nextCsvFrame == null,
+                dimensionsMatch && nextCsvFrame == null,
+                dimensionsStable && summary.frameCount > 0L
+            )
         }
     }
 }
