@@ -62,8 +62,33 @@ internal data class BasaltCalibrationProfile(
         }
     }
 
+    val cameraModelValid: Boolean
+        get() = cameraModel.isNotBlank() && imageWidth >= 16 && imageHeight >= 16 &&
+            fx.isFinite() && fx > 0.0 && fy.isFinite() && fy > 0.0 &&
+            cx.isFinite() && cy.isFinite() && cx >= 0.0 && cy >= 0.0 &&
+            cx < imageWidth && cy < imageHeight &&
+            distortion.isNotEmpty() && distortion.all { it.isFinite() }
+
+    val extrinsicsValid: Boolean
+        get() = cameraFromImuRotation.size == 9 &&
+            cameraFromImuRotation.all { it.isFinite() } &&
+            isRotationMatrix(cameraFromImuRotation) &&
+            cameraFromImuTranslationMeters.size == 3 &&
+            cameraFromImuTranslationMeters.all { it.isFinite() }
+
+    val gyroCalibrationValid: Boolean
+        get() = positiveFinite(gyroNoiseDensityRadPerSecSqrtHz) &&
+            positiveFinite(gyroRandomWalkRadPerSec2SqrtHz) &&
+            gyroBiasRadPerSec.size == 3 && gyroBiasRadPerSec.all { it.isFinite() }
+
+    val accelerometerCalibrationValid: Boolean
+        get() = positiveFinite(accelNoiseDensityMps2SqrtHz) &&
+            positiveFinite(accelRandomWalkMps3SqrtHz) &&
+            accelBiasMps2.size == 3 && accelBiasMps2.all { it.isFinite() }
+
     val isValid: Boolean
-        get() = validationErrors().isEmpty()
+        get() = cameraModelValid && extrinsicsValid &&
+            gyroCalibrationValid && accelerometerCalibrationValid
 
     private fun positiveFinite(value: Double) = value.isFinite() && value > 0.0
 
