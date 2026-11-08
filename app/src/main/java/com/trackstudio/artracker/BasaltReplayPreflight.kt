@@ -92,13 +92,7 @@ internal object BasaltReplayPreflight {
         csvFile: File,
         archiveFile: File
     ): Pair<BasaltFrameArchiveReader.Summary, Boolean> {
-        var reader: BufferedReader? = null
-        var nextCsvFrameTimestamp: Long? = null
-        var csvExhausted = false
-        var matches = true
-
-        fun advanceCsvFrame(): Long? {
-            val source = reader ?: return null
+        fun advanceCsvFrame(source: BufferedReader): Long? {
             while (true) {
                 val line = source.readLine() ?: return null
                 val fields = line.split(',')
@@ -108,28 +102,26 @@ internal object BasaltReplayPreflight {
             }
         }
 
-        try {
-            reader = csvFile.bufferedReader()
+        csvFile.bufferedReader().use { reader ->
             val header = reader.readLine()?.removePrefix("\uFEFF")
             if (header != SessionCsvValidator.EXPECTED_HEADER.joinToString(",")) {
                 throw IOException("Unexpected session CSV header")
             }
-            nextCsvFrameTimestamp = advanceCsvFrame()
 
+            var nextCsvFrameTimestamp = advanceCsvFrame(reader)
+            var csvExhausted = false
+            var matches = true
             val summary = BasaltFrameArchiveReader.read(archiveFile) { frame ->
                 if (csvExhausted) {
                     matches = false
                 } else {
                     if (nextCsvFrameTimestamp != frame.timestampNs) matches = false
-                    nextCsvFrameTimestamp = advanceCsvFrame()
+                    nextCsvFrameTimestamp = advanceCsvFrame(reader)
                     if (nextCsvFrameTimestamp == null) csvExhausted = true
                 }
             }
-            if (!csvExhausted && nextCsvFrameTimestamp != null) matches = false
+            if (nextCsvFrameTimestamp != null) matches = false
             return summary to (matches && nextCsvFrameTimestamp == null)
-        } finally {
-            reader?.close()
         }
     }
-
 }
