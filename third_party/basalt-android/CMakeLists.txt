@@ -10,34 +10,83 @@ if(NOT ANDROID_ABI STREQUAL "arm64-v8a")
     message(FATAL_ERROR "The initial Basalt Android build is arm64-v8a only; got: ${ANDROID_ABI}")
 endif()
 
-# Upstream sets STD_CXX_FS=stdc++fs on UNIX. Android's libc++ already provides
-# std::filesystem, so satisfy that upstream link item with an empty interface target.
-if(NOT TARGET stdc++fs)
-    add_library(stdc++fs INTERFACE IMPORTED GLOBAL)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# Build only the upstream VIO runtime sources required by the Android tracker.
+# The Basalt algorithm/source files remain byte-for-byte unchanged. We deliberately
+# do not add the upstream top-level CMake project because it also configures
+# desktop tools, calibration utilities, dataset readers, and test dependencies.
+set(BASALT_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../basalt")
+
+find_package(Eigen3 CONFIG REQUIRED)
+find_package(TBB CONFIG REQUIRED)
+find_package(OpenCV CONFIG REQUIRED COMPONENTS core imgproc features2d)
+find_package(fmt CONFIG REQUIRED)
+find_package(magic_enum CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+find_package(opengv CONFIG REQUIRED)
+find_package(basalt-headers CONFIG REQUIRED)
+
+add_library(basalt SHARED
+    "${BASALT_SOURCE_DIR}/src/linearization/landmark_block.cpp"
+    "${BASALT_SOURCE_DIR}/src/linearization/linearization_abs_qr.cpp"
+    "${BASALT_SOURCE_DIR}/src/linearization/linearization_abs_sc.cpp"
+    "${BASALT_SOURCE_DIR}/src/linearization/linearization_base.cpp"
+    "${BASALT_SOURCE_DIR}/src/linearization/linearization_rel_sc.cpp"
+    "${BASALT_SOURCE_DIR}/src/optical_flow/optical_flow.cpp"
+    "${BASALT_SOURCE_DIR}/src/utils/keypoints.cpp"
+    "${BASALT_SOURCE_DIR}/src/utils/system_utils.cpp"
+    "${BASALT_SOURCE_DIR}/src/utils/time_utils.cpp"
+    "${BASALT_SOURCE_DIR}/src/utils/vio_config.cpp"
+    "${BASALT_SOURCE_DIR}/src/vi_estimator/ba_base.cpp"
+    "${BASALT_SOURCE_DIR}/src/vi_estimator/landmark_database.cpp"
+    "${BASALT_SOURCE_DIR}/src/vi_estimator/marg_helper.cpp"
+    "${BASALT_SOURCE_DIR}/src/vi_estimator/nfr_mapper.cpp"
+    "${BASALT_SOURCE_DIR}/src/vi_estimator/sc_ba_base.cpp"
+    "${BASALT_SOURCE_DIR}/src/vi_estimator/sqrt_ba_base.cpp"
+    "${BASALT_SOURCE_DIR}/src/vi_estimator/sqrt_keypoint_vio.cpp"
+    "${BASALT_SOURCE_DIR}/src/vi_estimator/sqrt_keypoint_vo.cpp"
+    "${BASALT_SOURCE_DIR}/src/vi_estimator/vio_estimator.cpp"
+)
+
+target_include_directories(basalt
+    PUBLIC
+        "${BASALT_SOURCE_DIR}/include"
+        ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(basalt
+    PUBLIC
+        Eigen3::Eigen
+        TBB::tbb
+        basalt::basalt-headers
+        ${OpenCV_LIBS}
+    PRIVATE
+        fmt::fmt
+        magic_enum::magic_enum
+        nlohmann_json::nlohmann_json
+        opengv
+)
+
+target_compile_definitions(basalt PUBLIC
+    BASALT_INSTANTIATIONS_DOUBLE
+    BASALT_INSTANTIATIONS_FLOAT
+    EIGEN_DONT_PARALLELIZE
+)
+
+target_compile_options(basalt PRIVATE
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+)
+
+# Upstream's Clang compatibility flag is needed by NDK 27's Clang 18.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 20)
+    target_compile_options(basalt PRIVATE -frelaxed-template-template-args)
 endif()
 
-# Basalt's upstream CMakeLists unconditionally discovers desktop-tool and test
-# packages even when only the core library target is requested. These Android
-# config shims expose empty interface targets for those unbuilt targets, allowing
-# us to omit CLI11 and GTest from the Android dependency build without modifying
-# the upstream Basalt checkout.
-set(CLI11_DIR "${CMAKE_CURRENT_LIST_DIR}/cmake/stubs/cli11" CACHE PATH "CLI11 stub for unbuilt desktop tools" FORCE)
-set(GTest_DIR "${CMAKE_CURRENT_LIST_DIR}/cmake/stubs/gtest" CACHE PATH "GTest stub for unbuilt upstream tests" FORCE)
-
-# Keep upstream source untouched. These are cross-compilation/build options only.
-set(Pangolin_DIR "${CMAKE_CURRENT_LIST_DIR}/cmake/pangolin" CACHE PATH "No-GUI config for the Basalt core-only Android build" FORCE)
-set(BASALT_BUILD_SHARED_LIB ON CACHE BOOL "Build Basalt as a shared library" FORCE)
-set(BASALT_FULLY_STATIC_BINARIES OFF CACHE BOOL "Do not request Linux static executable linking" FORCE)
-set(CXX_MARCH "armv8-a" CACHE STRING "Explicit Android arm64 architecture" FORCE)
-set(BUILD_TESTS OFF CACHE BOOL "Do not build upstream tests in the Android app" FORCE)
-set(BUILD_TOOLS OFF CACHE BOOL "Do not build upstream desktop tools" FORCE)
-
-add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../basalt" basalt_upstream)
-
-# Upstream Basalt enables a warning suppression introduced in newer Clang.
-# NDK 27's Clang does not recognize that warning name; with upstream -Werror,
-# the unknown-warning diagnostic stops the build. Suppress only that diagnostic
-# for the Android Basalt target, without changing any upstream source or flags.
-if(TARGET basalt)
-    target_compile_options(basalt PRIVATE -Wno-unknown-warning-option)
-endif()
+message(STATUS "Building Basalt VIO core only for Android arm64-v8a")
+message(STATUS "Excluded: desktop GUI/tools, calibration apps, dataset readers, ROSbag, and tests")

@@ -2,15 +2,8 @@
   "name": "trackstudio-basalt-android",
   "version-string": "0.1.0",
   "dependencies": [
-    "boost-date-time",
-    "boost-filesystem",
-    "boost-format",
-    "boost-program-options",
-    "boost-regex",
-    "boost-thread",
     "eigen3",
     "fmt",
-    "lz4",
     "magic-enum",
     "nlohmann-json",
     {
@@ -20,7 +13,6 @@
     },
     "tbb",
     "basalt-headers",
-    "opengv",
-    "rosbag"
+    "opengv"
   ]
 }
