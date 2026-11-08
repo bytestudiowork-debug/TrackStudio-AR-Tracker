@@ -68,7 +68,8 @@ jobs:
           grep -n -- '-DWITH_KLEIDICV=OFF' "$PORTFILE"
           test -f "$OVERLAY_PORT/vcpkg.json"
 
-      - name: Restore vcpkg dependency caches
+      - name: Restore vcpkg and native build caches
+        id: basalt-cache
         uses: actions/cache@v4
         with:
           path: |
@@ -78,6 +79,16 @@ jobs:
           key: vcpkg-arm64-android-${{ runner.os }}-${{ hashFiles('third_party/basalt-android/CMakeLists.txt', 'third_party/basalt-android/vcpkg.json', 'third_party/basalt-android/vcpkg-triplets/**', 'third_party/basalt-android/cmake/**', 'third_party/basalt/src/**', 'third_party/basalt/include/**', 'third_party/basalt/thirdparty/vcpkg/versions/baseline.json') }}-basalt-0f3b2b5-ndk27-opencv-kleidicv-off-v3
           restore-keys: |
             vcpkg-arm64-android-${{ runner.os }}-
+
+      - name: Report native cache restore result
+        shell: bash
+        run: |
+          if [[ "${{ steps.basalt-cache.outputs.cache-hit }}" == "true" ]]; then
+            echo "Exact-key cache hit: vcpkg packages and the CMake/Ninja build tree were restored."
+          else
+            echo "No exact-key cache hit. A compatible restore-key may have been used, or this runner is cold."
+            echo "The dependency install and Ninja build will reuse any restored files and rebuild only what is missing or invalidated."
+          fi
 
       - name: Install Android arm64 Basalt dependencies
         run: |
