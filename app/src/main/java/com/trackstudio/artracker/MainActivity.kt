@@ -3,6 +3,7 @@ package com.trackstudio.artracker
 import android.Manifest
 import android.content.pm.PackageManager
 import android.content.Intent
+import java.io.File
 import android.os.Bundle
 import android.view.TextureView
 import androidx.activity.ComponentActivity
