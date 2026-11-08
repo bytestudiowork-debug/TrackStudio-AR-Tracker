@@ -7,7 +7,6 @@ import org.opencv.core.MatOfPoint
 import org.opencv.core.MatOfPoint2f
 import org.opencv.core.MatOfByte
 import org.opencv.core.MatOfFloat
-import org.opencv.core.Point
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import org.opencv.video.Video
@@ -15,17 +14,18 @@ import kotlin.math.roundToLong
 
 /**
  * OpenCV pyramidal Lucas-Kanade optical-flow tracker.
- * Frames are tightly packed 8-bit grayscale images supplied by Camera2.
+ * OpenCV is optional at runtime: if its native library cannot load, camera capture
+ * continues and feature statistics remain zero instead of crashing the app.
  */
 internal object NativeFeatureTracker {
     private const val MAX_CORNERS = 180
     private var previousGray: Mat? = null
     private var initialized = false
+    private var unavailable = false
 
     @Synchronized
     fun reset() {
-        previousGray?.release()
-        previousGray = null
+        releasePrevious()
     }
 
     @Synchronized
@@ -36,79 +36,100 @@ internal object NativeFeatureTracker {
         rowStride: Int,
         pixelStride: Int
     ): LongArray {
-        if (!initialized) {
-            initialized = OpenCVLoader.initLocal()
-            if (!initialized) return longArrayOf(0, 0, 0, 0)
-        }
+        if (unavailable) return EMPTY_RESULT
         if (width < 24 || height < 24 || rowStride < width || pixelStride != 1 ||
             luma.size < rowStride * height
-        ) return longArrayOf(0, 0, 0, 0)
+        ) return EMPTY_RESULT
 
-        val current = Mat(height, width, CvType.CV_8UC1)
-        current.put(0, 0, luma)
-        val previous = previousGray
-        if (previous == null || previous.empty() ||
-            previous.cols() != width || previous.rows() != height
-        ) {
-            reset()
-            previousGray = current
-            return longArrayOf(detectCorners(current), 0, 0, 0)
-        }
-
-        val previousCorners = MatOfPoint()
-        val previousPoints = MatOfPoint2f()
-        val nextPoints = MatOfPoint2f()
-        val status = MatOfByte()
-        val errors = MatOfFloat()
-        var tracked = 0
-        var sumX = 0.0
-        var sumY = 0.0
-        var detected = 0
-
-        try {
-            Imgproc.goodFeaturesToTrack(previous, previousCorners, MAX_CORNERS, 0.01, 8.0)
-            val cornerArray = previousCorners.toArray()
-            detected = cornerArray.size
-            if (cornerArray.isNotEmpty()) {
-                previousPoints.fromArray(*cornerArray)
-                Video.calcOpticalFlowPyrLK(
-                    previous,
-                    current,
-                    previousPoints,
-                    nextPoints,
-                    status,
-                    errors,
-                    Size(21.0, 21.0),
-                    3
-                )
-                val from = previousPoints.toArray()
-                val to = nextPoints.toArray()
-                val valid = status.toArray()
-                val err = errors.toArray()
-                val count = minOf(from.size, to.size, valid.size)
-                for (i in 0 until count) {
-                    if (valid[i].toInt() == 0 || (i < err.size && err[i] > 35f)) continue
-                    val dx = to[i].x - from[i].x
-                    val dy = to[i].y - from[i].y
-                    if (!dx.isFinite() || !dy.isFinite()) continue
-                    tracked++
-                    sumX += dx
-                    sumY += dy
+        return try {
+            if (!initialized) {
+                initialized = OpenCVLoader.initLocal()
+                if (!initialized) {
+                    unavailable = true
+                    return EMPTY_RESULT
                 }
             }
-        } finally {
-            previousCorners.release()
-            previousPoints.release()
-            nextPoints.release()
-            status.release()
-            errors.release()
-            previous.release()
+            processFrameWithOpenCv(luma, width, height)
+        } catch (error: LinkageError) {
+            // Missing/incompatible OpenCV JNI libraries must not terminate camera capture.
+            unavailable = true
+            releasePrevious()
+            EMPTY_RESULT
+        } catch (error: RuntimeException) {
+            // Treat a frame-level OpenCV failure as a dropped frame and reset optical flow.
+            releasePrevious()
+            EMPTY_RESULT
         }
+    }
 
-        previousGray = current
-        val motionX = if (tracked > 0) (sumX * 1000.0 / tracked).roundToLong() else 0L
-        val motionY = if (tracked > 0) (sumY * 1000.0 / tracked).roundToLong() else 0L
-        return longArrayOf(detected.toLong(), tracked.toLong(), motionX, motionY)
+    private fun processFrameWithOpenCv(luma: ByteArray, width: Int, height: Int): LongArray {
+        val current = Mat(height, width, CvType.CV_8UC1)
+        try {
+            current.put(0, 0, luma)
+            val previous = previousGray
+            if (previous == null || previous.empty() ||
+                previous.cols() != width || previous.rows() != height
+            ) {
+                releasePrevious()
+                previousGray = current
+                return longArrayOf(detectCorners(current), 0, 0, 0)
+            }
+
+            val previousCorners = MatOfPoint()
+            val previousPoints = MatOfPoint2f()
+            val nextPoints = MatOfPoint2f()
+            val status = MatOfByte()
+            val errors = MatOfFloat()
+            var tracked = 0
+            var sumX = 0.0
+            var sumY = 0.0
+            var detected = 0
+
+            try {
+                Imgproc.goodFeaturesToTrack(previous, previousCorners, MAX_CORNERS, 0.01, 8.0)
+                val cornerArray = previousCorners.toArray()
+                detected = cornerArray.size
+                if (cornerArray.isNotEmpty()) {
+                    previousPoints.fromArray(*cornerArray)
+                    Video.calcOpticalFlowPyrLK(
+                        previous, current, previousPoints, nextPoints, status, errors,
+                        Size(21.0, 21.0), 3
+                    )
+                    val from = previousPoints.toArray()
+                    val to = nextPoints.toArray()
+                    val valid = status.toArray()
+                    val err = errors.toArray()
+                    val count = minOf(from.size, to.size, valid.size)
+                    for (i in 0 until count) {
+                        if (valid[i].toInt() == 0 || (i < err.size && err[i] > 35f)) continue
+                        val dx = to[i].x - from[i].x
+                        val dy = to[i].y - from[i].y
+                        if (!dx.isFinite() || !dy.isFinite()) continue
+                        tracked++
+                        sumX += dx
+                        sumY += dy
+                    }
+                }
+            } finally {
+                previousCorners.release()
+                previousPoints.release()
+                nextPoints.release()
+                status.release()
+                errors.release()
+                previous.release()
+            }
+
+            previousGray = current
+            val motionX = if (tracked > 0) (sumX * 1000.0 / tracked).roundToLong() else 0L
+            val motionY = if (tracked > 0) (sumY * 1000.0 / tracked).roundToLong() else 0L
+            return longArrayOf(detected.toLong(), tracked.toLong(), motionX, motionY)
+        } catch (error: LinkageError) {
+            current.release()
+            throw error
+        } catch (error: RuntimeException) {
+            current.release()
+            throw error
+        }
     }
 
     private fun detectCorners(gray: Mat): Long {
@@ -120,4 +141,18 @@ internal object NativeFeatureTracker {
             corners.release()
         }
     }
+
+    private fun releasePrevious() {
+        try {
+            previousGray?.release()
+        } catch (_: LinkageError) {
+            // Native cleanup is best-effort when OpenCV itself failed to load.
+        } catch (_: RuntimeException) {
+            // A partially initialized Mat can fail during release.
+        } finally {
+            previousGray = null
+        }
+    }
+
+    private val EMPTY_RESULT = longArrayOf(0, 0, 0, 0)
 }
