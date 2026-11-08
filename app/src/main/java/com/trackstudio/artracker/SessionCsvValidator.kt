@@ -85,8 +85,27 @@ internal object SessionCsvValidator {
                 }
             }
             when (type) {
-                "FRAME" -> frames++
-                "IMU" -> imu++
+                "FRAME" -> {
+                    if ((fields[2].toIntOrNull() ?: 0) <= 0 ||
+                        (fields[3].toIntOrNull() ?: 0) <= 0
+                    ) {
+                        malformed++
+                        return null
+                    }
+                    frames++
+                }
+                "IMU" -> {
+                    // Basalt consumes the raw sensor vectors; never treat blank,
+                    // NaN or infinite values as valid measurements.
+                    if ((9..11).any { index ->
+                            fields[index].toDoubleOrNull()?.isFinite() != true
+                        }
+                    ) {
+                        malformed++
+                        return null
+                    }
+                    imu++
+                }
                 "IMU_DELTA" -> gyroDelta++
                 "ACCEL_DELTA" -> accelDelta++
             }
