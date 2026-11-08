@@ -29,8 +29,10 @@ Already available:
 - Camera/IMU fusion is conservatively allowed only when Camera2 reports the REALTIME timestamp source.
 - Camera metadata, stream crop/stride information and sensor timing diagnostics are written to session metadata.
 
+Replay preflight now implemented:
+- The strict TSBF/CSV preflight verifies archive integrity, frame count, exact frame timestamp alignment, stable frame dimensions, raw IMU numeric values, and the existing CSV timing screen before a native adapter may consume a session.
+
 Still missing before a real Basalt run:
-- The strict TSBF/CSV replay preflight is now implemented in TrackStudio code. It verifies archive integrity, frame count, exact frame timestamp alignment, stable dimensions, and the CSV timing screen before a native adapter may consume a session.
 - The native replay adapter that converts GRAY8 frames to Basalt's uint16 image convention and submits timestamped raw IMU samples to Basalt's public queues is still not connected.
 - A validated camera model transformed into the exact cropped/resized analysis-frame coordinate system.
 - Measured camera-to-IMU spatial extrinsics.
