@@ -80,7 +80,7 @@ jobs:
             --x-manifest-root="$GITHUB_WORKSPACE/third_party/basalt-android" \
             --x-install-root="$GITHUB_WORKSPACE/build/basalt-vcpkg-installed"
 
-      - name: Configure untouched Basalt source for Android
+      - name: Configure minimal Basalt VIO core for Android
         run: |
           cmake -S third_party/basalt-android -B build/basalt-android-arm64 -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
