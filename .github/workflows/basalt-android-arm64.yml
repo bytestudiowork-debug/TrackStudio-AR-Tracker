@@ -7,7 +7,6 @@ on:
     paths:
       - "third_party/basalt-android/**"
       - "app/src/main/java/com/trackstudio/artracker/BasaltNativeBridge.kt"
-      - "app/src/main/java/com/trackstudio/artracker/MainActivity.kt"
       - ".github/workflows/basalt-android-arm64.yml"
 
 concurrency:
