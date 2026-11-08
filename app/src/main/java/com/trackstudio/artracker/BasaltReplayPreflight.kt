@@ -44,9 +44,9 @@ internal object BasaltReplayPreflight {
         var timestampsMatch = false
 
         try {
-            archiveSummary = frameArchiveFile.let { archive ->
-                compareFrameTimestamps(csvFile, archive)
-            }
+            val comparison = compareFrameTimestamps(csvFile, frameArchiveFile)
+            archiveSummary = comparison.first
+            timestampsMatch = comparison.second
             if (archiveSummary.framesDropped != 0L) {
                 warnings += "The frame archive dropped ${archiveSummary.framesDropped} camera frames."
             }
@@ -91,7 +91,7 @@ internal object BasaltReplayPreflight {
     private fun compareFrameTimestamps(
         csvFile: File,
         archiveFile: File
-    ): BasaltFrameArchiveReader.Summary {
+    ): Pair<BasaltFrameArchiveReader.Summary, Boolean> {
         var reader: BufferedReader? = null
         var nextCsvFrameTimestamp: Long? = null
         var csvExhausted = false
@@ -126,13 +126,10 @@ internal object BasaltReplayPreflight {
                 }
             }
             if (!csvExhausted && nextCsvFrameTimestamp != null) matches = false
-            timestampsMatch = matches
-            return summary
+            return summary to (matches && nextCsvFrameTimestamp == null)
         } finally {
             reader?.close()
         }
     }
 
-    // Set only after the archive reader has verified its footer, checksums and frame order.
-    private var timestampsMatch: Boolean = false
 }
