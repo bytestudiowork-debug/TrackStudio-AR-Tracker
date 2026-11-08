@@ -25,6 +25,8 @@ class BasaltReplayPreflightTest {
         )
         val accepted = BasaltReplayPreflight.inspect(csv, archive, calibrated)
         assertTrue(accepted.frameTimestampsMatch)
+        assertTrue(accepted.frameDimensionsMatch)
+        assertTrue(accepted.frameDimensionsStable)
         assertTrue(accepted.calibrationComplete)
         assertTrue(accepted.readyForNativeVio)
 
