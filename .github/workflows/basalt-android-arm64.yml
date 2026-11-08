@@ -13,7 +13,6 @@ jobs:
     timeout-minutes: 90
     env:
       VCPKG_MAX_CONCURRENCY: 2
-      VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
     steps:
       - name: Checkout Basalt and its pinned dependency submodule
         uses: actions/checkout@v4
@@ -64,11 +63,21 @@ jobs:
           PORTFILE="$OVERLAY_PORT/portfile.cmake"
           grep -q -- '-DWITH_CPUFEATURES=${WITH_CPUFEATURES}' "$PORTFILE"
           if ! grep -q -- '-DWITH_KLEIDICV=OFF' "$PORTFILE"; then
-            sed -i '/-DWITH_CPUFEATURES=${WITH_CPUFEATURES}/a\        -DWITH_KLEIDICV=OFF' "$PORTFILE"
+            sed -i '/-DWITH_CPUFEATURES=${WITH_CPUFEATURES}/a\\        -DWITH_KLEIDICV=OFF' "$PORTFILE"
           fi
           grep -n -- '-DWITH_KLEIDICV=OFF' "$PORTFILE"
           test -f "$OVERLAY_PORT/vcpkg.json"
 
+      - name: Restore vcpkg dependency caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/vcpkg/archives
+            build/basalt-vcpkg-installed
+            build/basalt-android-arm64
+          key: vcpkg-arm64-android-${{ runner.os }}-${{ hashFiles('third_party/basalt-android/CMakeLists.txt', 'third_party/basalt-android/vcpkg.json', 'third_party/basalt-android/vcpkg-triplets/**', 'third_party/basalt-android/cmake/**', 'third_party/basalt/src/**', 'third_party/basalt/include/**', 'third_party/basalt/thirdparty/vcpkg/versions/baseline.json') }}-basalt-0f3b2b5-ndk27-opencv-kleidicv-off-v3
+          restore-keys: |
+            vcpkg-arm64-android-${{ runner.os }}-
 
       - name: Install Android arm64 Basalt dependencies
         run: |
@@ -100,64 +109,111 @@ jobs:
         run: cmake --build build/basalt-android-arm64 --target basalt --parallel 2
 
       - name: Verify arm64 output and collect minimal runtime closure
+        shell: bash
         run: |
           set -euo pipefail
-          LIB="$(find build/basalt-android-arm64 -type f -name 'libbasalt.so' -print -quit)"
-          test -n "$LIB"
           LLVM_READelf="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
-          "$LLVM_READelf" -h "$LIB" | grep -q "AArch64"
-          LIBCXX="$(find "$ANDROID_NDK_HOME" -type f -name 'libc++_shared.so' | grep -E '/(aarch64-linux-android|arm64-v8a)/libc\+\+_shared\.so$' | head -n1)"
-          test -n "$LIBCXX"
-          mkdir -p basalt-android-arm64-artifact
-          cp "$LIB" basalt-android-arm64-artifact/
-          cp "$LIBCXX" basalt-android-arm64-artifact/
-          python3 - "$LLVM_READelf" "$LIB" "$GITHUB_WORKSPACE/build/basalt-vcpkg-installed/arm64-android" "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot" basalt-android-arm64-artifact <<'PY'
+          python3 - "$LLVM_READelf" "$GITHUB_WORKSPACE/build/basalt-android-arm64" "$GITHUB_WORKSPACE/build/basalt-vcpkg-installed/arm64-android" "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot" "$GITHUB_WORKSPACE" <<'PY'
           import pathlib
           import re
           import shutil
           import subprocess
           import sys
 
-          readelf, root_lib, vcpkg_root, ndk_sysroot, output = sys.argv[1:]
-          root_lib = pathlib.Path(root_lib)
+          readelf, build_root, vcpkg_root, ndk_sysroot, workspace = sys.argv[1:]
+          build_root = pathlib.Path(build_root)
           vcpkg_root = pathlib.Path(vcpkg_root)
           ndk_sysroot = pathlib.Path(ndk_sysroot)
-          output = pathlib.Path(output)
-          copied = {root_lib.name}
-          pending = [root_lib]
+          workspace = pathlib.Path(workspace)
+          output = workspace / "basalt-android-arm64-artifact"
+          output.mkdir(parents=True, exist_ok=True)
+
+          def fail(message):
+              print(f"ERROR: {message}", file=sys.stderr, flush=True)
+              raise SystemExit(1)
+
+          libraries = sorted(build_root.rglob("libbasalt.so"))
+          if not libraries:
+              fail(f"libbasalt.so was not found under {build_root}")
+          root_lib = libraries[0]
+
+          header = subprocess.run(
+              [readelf, "-h", str(root_lib)],
+              check=True, capture_output=True, text=True
+          ).stdout
+          if "AArch64" not in header:
+              fail(f"{root_lib} is not an AArch64 ELF library")
+
+          libcxx_candidates = [
+              path for path in ndk_sysroot.rglob("libc++_shared.so")
+              if "aarch64-linux-android" in path.parts or "arm64-v8a" in path.parts
+          ]
+          if not libcxx_candidates:
+              fail(f"Could not locate arm64 libc++_shared.so under {ndk_sysroot}")
+          libcxx_candidates.sort(key=lambda path: (len(path.parts), path.as_posix()))
+          libcxx = libcxx_candidates[0]
+
+          shutil.copy2(root_lib, output / root_lib.name)
+          shutil.copy2(libcxx, output / libcxx.name)
+          print(f"Verified AArch64 library: {root_lib}", flush=True)
+          print(f"Bundled Android C++ runtime: {libcxx}", flush=True)
+
           needed_re = re.compile(r"\(NEEDED\).*Shared library: \[(.+?)\]")
 
           def needed(path):
-              result = subprocess.check_output([readelf, "-d", str(path)], text=True)
-              return needed_re.findall(result)
+              result = subprocess.run(
+                  [readelf, "-d", str(path)],
+                  check=True, capture_output=True, text=True
+              )
+              return needed_re.findall(result.stdout)
+
+          system_names = {
+              path.name for path in ndk_sysroot.rglob("*.so")
+              if "aarch64-linux-android" in path.parts or "arm64-v8a" in path.parts
+          }
+          copied = {root_lib.name, libcxx.name}
+          pending = [root_lib, libcxx]
 
           while pending:
               current = pending.pop()
               for soname in needed(current):
                   if soname in copied:
                       continue
-                  candidates = list(vcpkg_root.rglob(soname))
+
+                  candidates = [
+                      path for path in vcpkg_root.rglob(soname)
+                      if path.is_file() and "/debug/" not in path.as_posix()
+                  ]
                   if candidates:
-                      candidates.sort(key=lambda p: ("/debug/" in p.as_posix(), len(p.as_posix())))
+                      candidates.sort(key=lambda path: (len(path.as_posix()), path.as_posix()))
                       source = candidates[0]
                       destination = output / soname
                       shutil.copy2(source, destination)
                       copied.add(soname)
                       pending.append(destination)
-                      print(f"Bundled vcpkg runtime: {soname}")
+                      print(f"Bundled vcpkg runtime: {soname} from {source}", flush=True)
                       continue
 
-                  system_matches = list(ndk_sysroot.rglob(soname))
-                  if system_matches:
-                      print(f"Android system library (not bundled): {soname}")
+                  if soname in system_names:
+                      print(f"Android arm64 system library: {soname}", flush=True)
                       continue
 
-                  raise SystemExit(f"Unresolved ELF dependency {soname} required by {current}")
+                  fail(
+                      f"Unresolved ELF dependency '{soname}' required by '{current}'. "
+                      f"Searched vcpkg target tree '{vcpkg_root}' and Android arm64 sysroot '{ndk_sysroot}'."
+                  )
 
-          print("Runtime bundle:", ", ".join(sorted(copied)))
+          (output / "BASALT_COMMIT.txt").write_text(
+              "0f3b2b52c807f70ff4e2973ce253c73329eea7bc\n",
+              encoding="utf-8"
+          )
+          dynamic = subprocess.run(
+              [readelf, "-d", str(root_lib)],
+              check=True, capture_output=True, text=True
+          ).stdout
+          (output / "dynamic-dependencies.txt").write_text(dynamic, encoding="utf-8")
+          print("Runtime bundle: " + ", ".join(sorted(copied)), flush=True)
           PY
-          printf '%s\n' "0f3b2b52c807f70ff4e2973ce253c73329eea7bc" > basalt-android-arm64-artifact/BASALT_COMMIT.txt
-          "$LLVM_READelf" -d "$LIB" > basalt-android-arm64-artifact/dynamic-dependencies.txt
 
       - name: Upload isolated Basalt arm64 build
         uses: actions/upload-artifact@v4
