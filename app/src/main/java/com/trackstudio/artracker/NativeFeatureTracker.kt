@@ -19,6 +19,9 @@ import kotlin.math.roundToLong
  */
 internal object NativeFeatureTracker {
     private const val MAX_CORNERS = 180
+    // Keep native OpenCV off during camera bring-up on older Android devices.
+    // Re-enable only after the camera pipeline is verified on target hardware.
+    private const val ENABLE_OPENCV_TRACKING = false
     private var previousGray: Mat? = null
     private var initialized = false
     private var unavailable = false
@@ -36,7 +39,7 @@ internal object NativeFeatureTracker {
         rowStride: Int,
         pixelStride: Int
     ): LongArray {
-        if (unavailable) return EMPTY_RESULT
+        if (!ENABLE_OPENCV_TRACKING || unavailable) return EMPTY_RESULT
         if (width < 24 || height < 24 || rowStride < width || pixelStride != 1 ||
             luma.size < rowStride * height
         ) return EMPTY_RESULT
