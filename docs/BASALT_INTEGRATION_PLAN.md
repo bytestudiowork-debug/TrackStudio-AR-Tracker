@@ -4,6 +4,12 @@
 
 Basalt is the candidate primary VIO backend. It is not yet integrated. Camera2 + SensorManager remain the Android acquisition layer, and ARCore remains a possible optional backend for supported devices.
 
+## Current implementation checkpoint
+
+The Android arm64 Basalt shared library has been built successfully in the isolated wrapper. TrackStudio now also has a strict offline replay preflight that cross-checks the TSBF archive against CSV frame timestamps and dimensions, verifies archive integrity, and requires explicit camera/IMU calibration gates. This preflight does not call Basalt or produce poses.
+
+The next native milestone is a TrackStudio-owned JNI adapter outside the upstream submodule. It must load a validated single-camera Basalt calibration, create and connect the upstream optical-flow and VIO estimator queues, feed GRAY8 frames using the upstream 16-bit intensity convention, submit raw timestamped gyro/accelerometer measurements, and expose estimator states safely to Kotlin. Do not enable the live path until deterministic replay tests pass with a real calibrated dataset.
+
 ## Input contract
 
 The Basalt adapter must receive:
