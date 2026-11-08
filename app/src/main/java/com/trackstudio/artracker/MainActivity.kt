@@ -61,6 +61,7 @@ private fun CaptureScreen() {
         )
     }
     var stats by remember { mutableStateOf(CaptureStats()) }
+    val basaltNativeStatus = remember { BasaltNativeBridge.status() }
     val controller = remember {
         CameraImuCaptureController(context.applicationContext) { stats = it }
     }
@@ -102,6 +103,11 @@ private fun CaptureScreen() {
                 text = "VISUAL + INERTIAL TIMING TEST",
                 color = Color(0xFF9AA7B5),
                 fontSize = 11.sp
+            )
+            Text(
+                text = "Basalt native: $basaltNativeStatus",
+                color = Color(0xFF9AA7B5),
+                fontSize = 10.sp
             )
             Spacer(Modifier.height(12.dp))
 
