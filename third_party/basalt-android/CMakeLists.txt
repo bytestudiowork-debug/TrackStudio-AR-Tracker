@@ -16,6 +16,14 @@ if(NOT TARGET stdc++fs)
     add_library(stdc++fs INTERFACE IMPORTED GLOBAL)
 endif()
 
+# Basalt's upstream CMakeLists unconditionally discovers desktop-tool and test
+# packages even when only the core library target is requested. These Android
+# config shims expose empty interface targets for those unbuilt targets, allowing
+# us to omit CLI11 and GTest from the Android dependency build without modifying
+# the upstream Basalt checkout.
+set(CLI11_DIR "${CMAKE_CURRENT_LIST_DIR}/cmake/stubs/cli11" CACHE PATH "CLI11 stub for unbuilt desktop tools" FORCE)
+set(GTest_DIR "${CMAKE_CURRENT_LIST_DIR}/cmake/stubs/gtest" CACHE PATH "GTest stub for unbuilt upstream tests" FORCE)
+
 # Keep upstream source untouched. These are cross-compilation/build options only.
 set(Pangolin_DIR "${CMAKE_CURRENT_LIST_DIR}/cmake/pangolin" CACHE PATH "No-GUI config for the Basalt core-only Android build" FORCE)
 set(BASALT_BUILD_SHARED_LIB ON CACHE BOOL "Build Basalt as a shared library" FORCE)
