@@ -127,6 +127,30 @@ class CameraImuCaptureController(
 
     fun start() {
         if (running) return
+        try {
+            startCapture()
+        } catch (error: Exception) {
+            recoverFromStartFailure(error)
+        } catch (error: LinkageError) {
+            recoverFromStartFailure(error)
+        }
+    }
+
+    private fun recoverFromStartFailure(error: Throwable) {
+        // A partial startup may already own worker threads, sensors, or file handles.
+        // Stop what was initialized, but keep cleanup failures from crashing the activity.
+        try {
+            stop()
+        } catch (_: Exception) {
+            running = false
+        } catch (_: LinkageError) {
+            running = false
+        }
+        publish("Capture startup failed: ${error.javaClass.simpleName}")
+    }
+
+    private fun startCapture() {
+        if (running) return
         running = true
         NativeFeatureTracker.reset()
         imuPreintegrator.reset()
@@ -357,6 +381,9 @@ class CameraImuCaptureController(
                         }
                     } catch (_: RuntimeException) {
                         // Drop malformed or stale frames without terminating the camera callback thread.
+                    } catch (_: LinkageError) {
+                        // A native image-processing failure must not take down the app process.
+                        NativeFeatureTracker.reset()
                     } finally {
                         image?.close()
                     }
