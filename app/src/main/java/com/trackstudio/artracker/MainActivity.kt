@@ -113,6 +113,9 @@ private fun CaptureScreen() {
             )
             Button(onClick = {
                 try {
+                    // Finish the live capture first. stop() now drains the logger and
+                    // writes the replay report before the exporter looks for a session.
+                    controller.stop()
                     val bundle = SessionBundleExporter.createLatest(
                         File(context.filesDir, "sessions"),
                         File(context.cacheDir, "session-export")
@@ -130,9 +133,11 @@ private fun CaptureScreen() {
                     context.startActivity(Intent.createChooser(shareIntent, "Share capture bundle"))
                 } catch (error: Exception) {
                     stats = stats.copy(status = "Export failed: ${error.message ?: error.javaClass.simpleName}")
+                } catch (error: LinkageError) {
+                    stats = stats.copy(status = "Export failed: ${error.javaClass.simpleName}")
                 }
             }) {
-                Text("Export latest completed capture")
+                Text("Finish capture & export")
             }
             Spacer(Modifier.height(12.dp))
 
