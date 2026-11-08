@@ -2,6 +2,7 @@ package com.trackstudio.artracker
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.Intent
 import android.os.Bundle
 import android.view.TextureView
 import androidx.activity.ComponentActivity
@@ -109,6 +110,29 @@ private fun CaptureScreen() {
                 color = Color(0xFF9AA7B5),
                 fontSize = 10.sp
             )
+            Button(onClick = {
+                try {
+                    val bundle = SessionBundleExporter.createLatest(
+                        File(context.filesDir, "sessions"),
+                        File(context.cacheDir, "session-export")
+                    )
+                    val uri = androidx.core.content.FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        bundle
+                    )
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "application/zip"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(Intent.createChooser(shareIntent, "Share capture bundle"))
+                } catch (error: Exception) {
+                    stats = stats.copy(status = "Export failed: ${error.message ?: error.javaClass.simpleName}")
+                }
+            }) {
+                Text("Export latest completed capture")
+            }
             Spacer(Modifier.height(12.dp))
 
             if (hasCameraPermission) {
