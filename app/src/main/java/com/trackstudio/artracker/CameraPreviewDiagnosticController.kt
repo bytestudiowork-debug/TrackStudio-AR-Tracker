@@ -30,6 +30,7 @@ internal class CameraPreviewDiagnosticController(
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var previewSurface: Surface? = null
+    @Volatile private var activeCameraId: String? = null
     private var opening = false
 
     /** Trigger one-shot autofocus when the user taps the focus control. */
@@ -39,10 +40,7 @@ internal class CameraPreviewDiagnosticController(
             val session = captureSession ?: return@post
             val surface = previewSurface ?: return@post
             try {
-                val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
-                    cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) ==
-                        CameraCharacteristics.LENS_FACING_BACK
-                } ?: cameraManager.cameraIdList.firstOrNull() ?: return@post
+                val cameraId = activeCameraId ?: return@post
                 val characteristics = cameraManager.getCameraCharacteristics(cameraId)
                 val modes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
                 if (modes?.contains(CaptureRequest.CONTROL_AF_MODE_AUTO) != true) {
@@ -62,15 +60,13 @@ internal class CameraPreviewDiagnosticController(
                         result: android.hardware.camera2.TotalCaptureResult
                     ) {
                         try {
-                            request.let {
-                                val idleRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                                    addTarget(surface)
-                                    set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
-                                    set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-                                }.build()
-                                session.setRepeatingRequest(idleRequest, null, cameraHandler)
-                            }
+                            val idleRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                                addTarget(surface)
+                                set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                                set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+                            }.build()
+                            session.setRepeatingRequest(idleRequest, null, cameraHandler)
                         } catch (error: Exception) {
                             publish("Could not resume preview after focus: ${error.message}")
                         }
@@ -145,6 +141,7 @@ internal class CameraPreviewDiagnosticController(
                 publish("No camera was reported by this device")
                 return
             }
+            activeCameraId = cameraId
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 ?: run {
@@ -239,6 +236,7 @@ internal class CameraPreviewDiagnosticController(
         captureSession = null
         try { cameraDevice?.close() } catch (_: Exception) { }
         cameraDevice = null
+        activeCameraId = null
         try { previewSurface?.release() } catch (_: Exception) { }
         previewSurface = null
         opening = false
