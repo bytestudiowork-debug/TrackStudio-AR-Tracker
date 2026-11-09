@@ -32,6 +32,56 @@ internal class CameraPreviewDiagnosticController(
     private var previewSurface: Surface? = null
     private var opening = false
 
+    /** Trigger one-shot autofocus when the user taps the focus control. */
+    fun focus() {
+        cameraHandler?.post {
+            val camera = cameraDevice ?: return@post
+            val session = captureSession ?: return@post
+            val surface = previewSurface ?: return@post
+            try {
+                val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
+                    cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) ==
+                        CameraCharacteristics.LENS_FACING_BACK
+                } ?: cameraManager.cameraIdList.firstOrNull() ?: return@post
+                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+                val modes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
+                if (modes?.contains(CaptureRequest.CONTROL_AF_MODE_AUTO) != true) {
+                    publish("Autofocus is not supported by this camera")
+                    return@post
+                }
+                val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                    addTarget(surface)
+                    set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                    set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
+                }
+                session.capture(request.build(), object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureCompleted(
+                        session: CameraCaptureSession,
+                        request: CaptureRequest,
+                        result: android.hardware.camera2.TotalCaptureResult
+                    ) {
+                        try {
+                            request.let {
+                                val idleRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                                    addTarget(surface)
+                                    set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                                    set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+                                }.build()
+                                session.setRepeatingRequest(idleRequest, null, cameraHandler)
+                            }
+                        } catch (error: Exception) {
+                            publish("Could not resume preview after focus: ${error.message}")
+                        }
+                    }
+                }, cameraHandler)
+            } catch (error: Exception) {
+                publish("Autofocus failed: ${error.message}")
+            }
+        }
+    }
+
     fun attach(view: TextureView) {
         if (textureView !== view) {
             textureView = view
