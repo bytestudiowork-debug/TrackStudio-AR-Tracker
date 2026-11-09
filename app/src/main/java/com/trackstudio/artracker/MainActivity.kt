@@ -80,10 +80,22 @@ private fun TrackStudioArApp() {
     }
 
     BackHandler(screen != Screen.HOME) {
-        screen = when (screen) {
-            Screen.CAMERA -> Screen.DETAIL
-            Screen.DETAIL -> Screen.PROJECTS
-            else -> Screen.HOME
+        if (screen == Screen.CAMERA) {
+            val current = selected
+            cameraController.stopRecording { _, _ ->
+                Handler(context.mainLooper).post {
+                    projects = repository.listProjects()
+                    selected = current?.let { old ->
+                        repository.listProjects().firstOrNull { it.id == old.id } ?: old
+                    }
+                    screen = Screen.DETAIL
+                }
+            }
+        } else {
+            screen = when (screen) {
+                Screen.DETAIL -> Screen.PROJECTS
+                else -> Screen.HOME
+            }
         }
     }
 
@@ -124,9 +136,15 @@ private fun TrackStudioArApp() {
                     if (p == null) screen = Screen.HOME
                     else CameraScreen(p, hasPermission, cameraStatus, cameraController,
                         {
-                            projects = repository.listProjects()
-                            selected = repository.listProjects().firstOrNull { it.id == p.id } ?: p
-                            screen = Screen.DETAIL
+                            controllerStopAndReturn@ run {
+                                cameraController.stopRecording { _, _ ->
+                                    Handler(context.mainLooper).post {
+                                        projects = repository.listProjects()
+                                        selected = repository.listProjects().firstOrNull { it.id == p.id } ?: p
+                                        screen = Screen.DETAIL
+                                    }
+                                }
+                            }
                         },
                         { permissionLauncher.launch(Manifest.permission.CAMERA) },
                         { cameraStatus = it })
