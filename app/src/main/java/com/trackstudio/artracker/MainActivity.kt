@@ -302,58 +302,119 @@ private fun CameraScreen(
                 Button(onClick = requestPermission) { Text("Allow camera") }
             }
         }
-        Row(Modifier.align(Alignment.TopCenter).fillMaxWidth()
-            .background(Color.Black.copy(alpha = .58f)).padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Text("‹", Modifier.clickable(onClick = back).padding(end = 14.dp), color = Color.White, fontSize = 32.sp)
-            Column(Modifier.weight(1f)) {
-                Text(project.name, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("TRACKSTUDIO AR · LIVE VIEW", color = Color.White.copy(alpha = .72f), fontSize = 9.sp, letterSpacing = 1.sp)
+        Row(
+            Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                modifier = Modifier.size(48.dp).clickable(onClick = back),
+                shape = CircleShape,
+                color = Color.Black.copy(alpha = .42f)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text("‹", color = Color.White, fontSize = 34.sp)
+                }
             }
-            Surface(shape = CircleShape, color = Color.White.copy(alpha = .16f)) {
-                Text("PREVIEW", Modifier.padding(horizontal = 10.dp, vertical = 6.dp), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Surface(
+                modifier = Modifier.size(48.dp).clickable(onClick = controller::focus),
+                shape = CircleShape,
+                color = Color.Black.copy(alpha = .42f)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    FocusReticleIcon()
+                }
             }
-        }
-        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-            .background(Color.Black.copy(alpha = .68f)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(status, color = Color.White, fontSize = 12.sp)
-            Text("Full-screen camera preview. Recording and live anchor-point tracking are being integrated next.", color = Color.White.copy(alpha = .72f), fontSize = 11.sp, lineHeight = 15.sp)
         }
     }
 }
 
-private data class CameraCapabilities(val sizes: List<String>, val fps: List<String>)
+private data class CameraCapabilities(
+    val sizes: List<String>,
+    val fps: List<String>,
+    val highSpeedModes: List<String>
+)
 
 private fun cameraCapabilities(context: Context): CameraCapabilities = try {
     val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     val id = manager.cameraIdList.firstOrNull {
         manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
     } ?: manager.cameraIdList.firstOrNull()
-    if (id == null) CameraCapabilities(emptyList(), emptyList()) else {
+    if (id == null) CameraCapabilities(emptyList(), emptyList(), emptyList()) else {
         val c = manager.getCameraCharacteristics(id)
         val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        val sizes = map?.getOutputSizes(MediaRecorder::class.java)?.sortedByDescending { it.width.toLong() * it.height }
-            ?.map { "${it.width} × ${it.height}" }?.distinct()?.take(10) ?: emptyList()
+        val sizes = map?.getOutputSizes(MediaRecorder::class.java)
+            ?.sortedByDescending { it.width.toLong() * it.height }
+            ?.map { "${it.width} × ${it.height}" }?.distinct() ?: emptyList()
         val fps = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-            ?.map { "${it.lower}–${it.upper} FPS" }?.distinct()?.take(8) ?: emptyList()
-        CameraCapabilities(sizes, fps)
+            ?.map { "${it.lower}–${it.upper} FPS" }?.distinct()
+            ?.sortedByDescending { it.substringAfter("–").substringBefore(" FPS").toIntOrNull() ?: 0 }
+            ?: emptyList()
+        val highSpeedModes = map?.highSpeedVideoSizes?.flatMap { size ->
+            map.getHighSpeedVideoFpsRangesFor(size)?.map { range ->
+                "${size.width} × ${size.height} · ${range.lower}–${range.upper} FPS"
+            } ?: emptyList()
+        }?.distinct()?.sorted() ?: emptyList()
+        CameraCapabilities(sizes, fps, highSpeedModes)
     }
-} catch (_: Exception) { CameraCapabilities(emptyList(), emptyList()) }
+} catch (_: Exception) { CameraCapabilities(emptyList(), emptyList(), emptyList()) }
+
+@Composable
+private fun FocusReticleIcon() {
+    androidx.compose.foundation.Canvas(Modifier.size(27.dp)) {
+        val stroke = 2.dp.toPx()
+        val arm = size.minDimension * .27f
+        val inset = size.minDimension * .18f
+        val right = size.width - inset
+        val bottom = size.height - inset
+        val color = Color.White
+        drawLine(color, androidx.compose.ui.geometry.Offset(inset, inset), androidx.compose.ui.geometry.Offset(inset + arm, inset), stroke)
+        drawLine(color, androidx.compose.ui.geometry.Offset(inset, inset), androidx.compose.ui.geometry.Offset(inset, inset + arm), stroke)
+        drawLine(color, androidx.compose.ui.geometry.Offset(right, inset), androidx.compose.ui.geometry.Offset(right - arm, inset), stroke)
+        drawLine(color, androidx.compose.ui.geometry.Offset(right, inset), androidx.compose.ui.geometry.Offset(right, inset + arm), stroke)
+        drawLine(color, androidx.compose.ui.geometry.Offset(inset, bottom), androidx.compose.ui.geometry.Offset(inset + arm, bottom), stroke)
+        drawLine(color, androidx.compose.ui.geometry.Offset(inset, bottom), androidx.compose.ui.geometry.Offset(inset, bottom - arm), stroke)
+        drawLine(color, androidx.compose.ui.geometry.Offset(right, bottom), androidx.compose.ui.geometry.Offset(right - arm, bottom), stroke)
+        drawLine(color, androidx.compose.ui.geometry.Offset(right, bottom), androidx.compose.ui.geometry.Offset(right, bottom - arm), stroke)
+    }
+}
 
 @Composable
 private fun CameraSettingsScreen(back: () -> Unit) {
     val context = LocalContext.current
     val capabilities = remember { cameraCapabilities(context) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-        PageHeader("Camera settings", "Capabilities reported by this device", back)
-        Text("RECORDING RESOLUTIONS", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.SemiBold)
+        PageHeader("Camera settings", "Automatically detected device capabilities", back)
+        val maximumFps = capabilities.fps.maxOfOrNull {
+            it.substringAfter("–").substringBefore(" FPS").toIntOrNull() ?: 0
+        } ?: 0
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("DEVICE DETECTION", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                Text(
+                    if (capabilities.sizes.isEmpty()) "No recorder output sizes reported"
+                    else "${capabilities.sizes.size} recording resolutions detected",
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    if (maximumFps > 0) "Highest reported camera FPS range: up to $maximumFps FPS"
+                    else "Camera FPS ranges are not reported",
+                    fontSize = 13.sp
+                )
+            }
+        }
+        Text("SUPPORTED RECORDING RESOLUTIONS", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.SemiBold)
         if (capabilities.sizes.isEmpty()) Text("Recording sizes are not reported by Camera2.")
         else capabilities.sizes.forEach { CapabilityRow(it) }
-        Text("FRAME RATE RANGES", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.SemiBold)
+        Text("CAMERA FRAME-RATE RANGES", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.SemiBold)
         if (capabilities.fps.isEmpty()) Text("Frame-rate ranges are not reported.")
         else capabilities.fps.forEach { CapabilityRow(it) }
+        if (capabilities.highSpeedModes.isNotEmpty()) {
+            Text("HIGH-SPEED VIDEO MODES", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.SemiBold)
+            capabilities.highSpeedModes.forEach { CapabilityRow(it) }
+        }
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Text("The capture engine will select from the device-supported profiles. The verified camera preview configuration is intentionally unchanged in this build.",
+            Text("These are capabilities reported by Android for the selected camera. A resolution and FPS range shown separately are not proof that every combination works together. The recording engine must validate the selected combination when recording is implemented.",
                 Modifier.padding(14.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
