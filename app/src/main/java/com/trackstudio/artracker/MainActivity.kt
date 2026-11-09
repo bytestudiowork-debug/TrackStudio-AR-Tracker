@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.MediaRecorder
+import android.os.Handler
 import android.view.TextureView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -335,6 +336,9 @@ private fun CameraScreen(
     project: TrackStudioProject, hasPermission: Boolean, status: String,
     controller: CameraPreviewDiagnosticController, back: () -> Unit, requestPermission: () -> Unit
 ) {
+    var isRecording by remember(project.id) { mutableStateOf(false) }
+    var torchOn by remember(project.id) { mutableStateOf(false) }
+    val mainHandler = remember { Handler(context.mainLooper) }
     val lifecycle = LocalLifecycleOwner.current
     DisposableEffect(lifecycle, hasPermission, controller) {
         val observer = LifecycleEventObserver { _, event ->
@@ -361,6 +365,71 @@ private fun CameraScreen(
                 Text("Camera permission needed", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 Text("Allow camera access to open the viewfinder.", color = Color.LightGray)
                 Button(onClick = requestPermission) { Text("Allow camera") }
+            }
+        }
+        if (hasPermission) {
+            Row(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 34.dp, vertical = 28.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    modifier = Modifier.size(54.dp).clickable {
+                        controller.toggleTorch { enabled ->
+                            mainHandler.post { torchOn = enabled }
+                        }
+                    },
+                    shape = CircleShape,
+                    color = if (torchOn) Color(0xFFFFC857) else Color.Black.copy(alpha = .55f)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(if (torchOn) "⚡" else "♧", color = if (torchOn) Color.Black else Color.White, fontSize = 25.sp)
+                    }
+                }
+                Surface(
+                    modifier = Modifier.size(76.dp).clickable {
+                        if (isRecording) {
+                            controller.stopRecording { active, message ->
+                                mainHandler.post { isRecording = active; cameraStatus = message }
+                            }
+                        } else {
+                            controller.startRecording(project) { active, message ->
+                                mainHandler.post { isRecording = active; cameraStatus = message }
+                            }
+                        }
+                    },
+                    shape = CircleShape,
+                    color = Color.White.copy(alpha = .94f)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        if (isRecording) {
+                            Surface(Modifier.size(25.dp), shape = RoundedCornerShape(5.dp), color = Color.Red) {}
+                        } else {
+                            Surface(Modifier.size(30.dp), shape = CircleShape, color = Color.Red) {}
+                        }
+                    }
+                }
+                Surface(
+                    modifier = Modifier.size(54.dp),
+                    shape = CircleShape,
+                    color = Color.Black.copy(alpha = .55f)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(if (isRecording) "REC" else " ", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            if (isRecording) {
+                Surface(
+                    Modifier.align(Alignment.TopStart).padding(start = 16.dp, top = 76.dp),
+                    shape = RoundedCornerShape(20.dp), color = Color.Black.copy(alpha = .58f)
+                ) {
+                    Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(Modifier.size(7.dp), shape = CircleShape, color = Color.Red) {}
+                        Spacer(Modifier.width(7.dp))
+                        Text("RECORDING", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
         Row(
