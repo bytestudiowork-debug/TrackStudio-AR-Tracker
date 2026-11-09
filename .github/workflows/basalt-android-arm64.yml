@@ -48,7 +48,7 @@ jobs:
           SDKMANAGER="$(command -v sdkmanager)"
           "$SDKMANAGER" "ndk;27.0.12077973"
           sudo apt-get update
-          sudo apt-get install -y ninja-build
+          sudo apt-get install -y ninja-build libfmt-dev libcurl4-openssl-dev
 
       - name: Install pinned CMake from PyPI
         run: |
@@ -69,9 +69,11 @@ jobs:
         with:
           path: |
             ~/.cache/vcpkg/archives
+            third_party/basalt/thirdparty/vcpkg/vcpkg
+            build/vcpkg-tool
             build/basalt-vcpkg-installed
             build/basalt-android-arm64
-          key: vcpkg-arm64-android-${{ runner.os }}-${{ hashFiles('third_party/basalt-android/CMakeLists.txt', 'third_party/basalt-android/vcpkg.json', 'third_party/basalt-android/vcpkg-triplets/**', 'third_party/basalt-android/cmake/**', 'third_party/basalt/src/**', 'third_party/basalt/include/**', 'third_party/basalt/thirdparty/vcpkg/versions/baseline.json') }}-basalt-0f3b2b5-ndk27-opencv-kleidicv-off-v4
+          key: vcpkg-arm64-android-${{ runner.os }}-${{ hashFiles('third_party/basalt-android/CMakeLists.txt', 'third_party/basalt-android/vcpkg.json', 'third_party/basalt-android/vcpkg-triplets/**', 'third_party/basalt-android/cmake/**', 'third_party/basalt/src/**', 'third_party/basalt/include/**', 'third_party/basalt/thirdparty/vcpkg/versions/baseline.json') }}-basalt-0f3b2b5-ndk27-opencv-kleidicv-off-v5
           restore-keys: |
             vcpkg-arm64-android-${{ runner.os }}-
 
@@ -85,10 +87,38 @@ jobs:
             echo "The dependency install and Ninja build will reuse any restored files and rebuild only what is missing or invalidated."
           fi
 
-      - name: Bootstrap pinned vcpkg using runner system binaries
-        env:
-          VCPKG_FORCE_SYSTEM_BINARIES: "1"
-        run: ./third_party/basalt/thirdparty/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+      - name: Build pinned vcpkg tool from source (no release binary download)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VCPKG_TOOL_TAG="2026-03-04"
+          VCPKG_TOOL_SOURCE="$RUNNER_TEMP/vcpkg-tool-source"
+          CMRC_SOURCE="$RUNNER_TEMP/cmrc-source"
+          VCPKG_TOOL_BUILD="$GITHUB_WORKSPACE/build/vcpkg-tool"
+
+          # Reuse the cached executable when available. The pinned vcpkg source and
+          # CMake build tree are deterministic for this workflow.
+          if [[ ! -x "$VCPKG_ROOT/vcpkg" ]]; then
+            git clone --filter=blob:none --depth 1 --branch "$VCPKG_TOOL_TAG" \
+              https://github.com/microsoft/vcpkg-tool.git "$VCPKG_TOOL_SOURCE"
+            git clone --filter=blob:none --depth 1 --branch "2.0.1" \
+              https://github.com/vector-of-bool/cmrc.git "$CMRC_SOURCE"
+
+            # Apply vcpkg's pinned CMakeRC compatibility patch to the local source,
+            # avoiding a GitHub archive download during FetchContent.
+            git -C "$CMRC_SOURCE" apply "$VCPKG_TOOL_SOURCE/cmake/CMakeRC_cmake_4.patch"
+
+            cmake -S "$VCPKG_TOOL_SOURCE" -B "$VCPKG_TOOL_BUILD" -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_TESTING=OFF \
+              -DVCPKG_DEVELOPMENT_WARNINGS=OFF \
+              -DFETCHCONTENT_SOURCE_DIR_CMAKERC="$CMRC_SOURCE"
+            cmake --build "$VCPKG_TOOL_BUILD" --target vcpkg --parallel 2
+            install -m 0755 "$VCPKG_TOOL_BUILD/vcpkg" "$VCPKG_ROOT/vcpkg"
+          fi
+
+          touch "$VCPKG_ROOT/vcpkg.disable-metrics"
+          "$VCPKG_ROOT/vcpkg" version --disable-metrics
 
       - name: Fetch full vcpkg history for versioned port trees
         run: |
