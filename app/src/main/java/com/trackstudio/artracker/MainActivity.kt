@@ -289,9 +289,11 @@ private fun CameraScreen(
     }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (hasPermission) {
-            AndroidView(Modifier.fillMaxSize(),
-                factory = { TextureView(it).also(controller::attach) },
-                update = controller::attach)
+            AndroidView(
+                factory = { viewContext -> TextureView(viewContext).also(controller::attach) },
+                modifier = Modifier.fillMaxSize(),
+                update = { textureView -> controller.attach(textureView) }
+            )
         } else {
             Column(Modifier.align(Alignment.Center).padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
