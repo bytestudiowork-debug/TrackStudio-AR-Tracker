@@ -123,7 +123,11 @@ private fun TrackStudioArApp() {
                     val p = selected
                     if (p == null) screen = Screen.HOME
                     else CameraScreen(p, hasPermission, cameraStatus, cameraController,
-                        { screen = Screen.DETAIL },
+                        {
+                            projects = repository.listProjects()
+                            selected = repository.listProjects().firstOrNull { it.id == p.id } ?: p
+                            screen = Screen.DETAIL
+                        },
                         { permissionLauncher.launch(Manifest.permission.CAMERA) },
                         { cameraStatus = it })
                 }
@@ -397,7 +401,7 @@ private fun CameraScreen(
                             }
                         } else {
                             controller.startRecording(project) { active, message ->
-                                mainHandler.post { isRecording = active; cameraStatus = message }
+                                mainHandler.post { isRecording = active; onStatus(message) }
                             }
                         }
                     },
