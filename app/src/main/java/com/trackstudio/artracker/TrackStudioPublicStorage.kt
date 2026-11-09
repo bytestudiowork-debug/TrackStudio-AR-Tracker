@@ -31,7 +31,7 @@ internal object TrackStudioPublicStorage {
         val sessions = File(context.filesDir, "sessions")
         if (sessions.isDirectory) {
             sessions.walkTopDown().filter { it.isFile }.forEach { source ->
-                if (copyFile(context, source, "$safeProjectName/Tracking Data/Sessions/\${source.name}")) copied++
+                if (copyFile(context, source, "$safeProjectName/Tracking Data/Sessions/" + source.name)) copied++
             }
         }
         return copied
@@ -68,7 +68,7 @@ internal object TrackStudioPublicStorage {
         val documents = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
         val destination = File(File(documents, "TrackStudio"), cleanRelativePath)
         destination.parentFile?.let {
-            if (!it.exists() && !it.mkdirs()) throw IllegalStateException("Could not create \${it.path}")
+            if (!it.exists() && !it.mkdirs()) throw IllegalStateException("Could not create " + it.path)
         }
         FileInputStream(source).use { input ->
             FileOutputStream(destination).use { output -> input.copyTo(output) }
