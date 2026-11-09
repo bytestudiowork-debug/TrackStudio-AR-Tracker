@@ -3,6 +3,8 @@ package com.trackstudio.artracker
 import android.content.Context
 import org.json.JSONObject
 import java.io.File
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 internal data class TrackStudioProject(
     val id: String,
@@ -38,6 +40,41 @@ internal class TrackStudioProjectRepository(context: Context) {
             .put("projectName", displayName).put("createdAtUnixMs", createdAt).put("recordingCount", 0)
         File(directory, "project.json").writeText(json.toString(2), Charsets.UTF_8)
         return TrackStudioProject(directory.name, displayName, directory, createdAt, 0)
+    }
+
+    fun renameProject(project: TrackStudioProject, rawName: String): TrackStudioProject {
+        val displayName = rawName.trim().replace(Regex("\\s+"), " ")
+        require(displayName.isNotEmpty()) { "Project name cannot be empty" }
+        val metadata = File(project.directory, "project.json")
+        val json = JSONObject(metadata.readText(Charsets.UTF_8))
+        json.put("projectName", displayName)
+        metadata.writeText(json.toString(2), Charsets.UTF_8)
+        return readProject(project.directory) ?: project.copy(name = displayName)
+    }
+
+    fun deleteProject(project: TrackStudioProject) {
+        require(project.directory.canonicalFile.parentFile == root.canonicalFile) {
+            "Invalid project directory"
+        }
+        if (project.directory.exists() && !project.directory.deleteRecursively()) {
+            throw IllegalStateException("Could not delete project files")
+        }
+    }
+
+    fun exportProjectZip(project: TrackStudioProject, cacheDirectory: File): File {
+        require(project.directory.isDirectory) { "Project no longer exists" }
+        val exportDirectory = File(cacheDirectory, "session-export").apply { mkdirs() }
+        val output = File(exportDirectory, "${project.id}-share.zip")
+        ZipOutputStream(output.outputStream().buffered()).use { zip ->
+            val base = project.directory.canonicalFile
+            project.directory.walkTopDown().filter { it.isFile }.forEach { file ->
+                val relative = file.relativeTo(base).invariantSeparatorsPath
+                zip.putNextEntry(ZipEntry("${project.name}/$relative"))
+                file.inputStream().buffered().use { input -> input.copyTo(zip) }
+                zip.closeEntry()
+            }
+        }
+        return output
     }
 
     private fun readProject(directory: File): TrackStudioProject? = try {
