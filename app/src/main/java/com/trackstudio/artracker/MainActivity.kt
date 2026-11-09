@@ -2,9 +2,6 @@ package com.trackstudio.artracker
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.content.Intent
-import java.io.File
-import android.os.Bundle
 import android.view.TextureView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -14,7 +11,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,6 +20,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,18 +39,22 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 
 class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                CaptureScreen()
+                CameraCompatibilityScreen()
             }
         }
     }
 }
 
-@androidx.compose.runtime.Composable
-private fun CaptureScreen() {
+/**
+ * Temporary diagnostic screen. The only active device feature is a Camera2
+ * preview stream; the production capture pipeline is intentionally not started.
+ */
+@Composable
+private fun CameraCompatibilityScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var hasCameraPermission by remember {
@@ -62,16 +63,15 @@ private fun CaptureScreen() {
                 PackageManager.PERMISSION_GRANTED
         )
     }
-    var stats by remember { mutableStateOf(CaptureStats()) }
-    val basaltNativeStatus = remember { BasaltNativeBridge.status() }
+    var status by remember { mutableStateOf("Waiting for camera permission") }
     val controller = remember {
-        CameraImuCaptureController(context.applicationContext) { stats = it }
+        CameraPreviewDiagnosticController(context.applicationContext) { status = it }
     }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasCameraPermission = granted
-        if (!granted) stats = stats.copy(status = "Camera permission denied")
+        status = if (granted) "Permission granted — preparing preview" else "Camera permission denied"
     }
 
     DisposableEffect(lifecycleOwner, hasCameraPermission, controller) {
@@ -95,52 +95,21 @@ private fun CaptureScreen() {
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF101318)) {
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("TRACKSTUDIO / CAMERA DIAGNOSTIC", color = Color.White, fontSize = 18.sp)
             Text(
-                text = "TRACKSTUDIO  /  AR TRACKER",
-                color = Color.White,
-                fontSize = 18.sp
-            )
-            Text(
-                text = "VISUAL + INERTIAL TIMING TEST",
+                "Stage 1: Camera2 preview only",
                 color = Color(0xFF9AA7B5),
-                fontSize = 11.sp
+                fontSize = 12.sp
             )
             Text(
-                text = "Basalt native: $basaltNativeStatus",
+                "OpenCV, JNI, IMU, ImageReader processing and recording are disabled for this test.",
                 color = Color(0xFF9AA7B5),
-                fontSize = 10.sp
+                fontSize = 12.sp
             )
-            Button(onClick = {
-                try {
-                    // Finish the live capture first. stop() now drains the logger and
-                    // writes the replay report before the exporter looks for a session.
-                    controller.stop()
-                    val bundle = SessionBundleExporter.createLatest(
-                        File(context.filesDir, "sessions"),
-                        File(context.cacheDir, "session-export")
-                    )
-                    val uri = androidx.core.content.FileProvider.getUriForFile(
-                        context,
-                        "${context.packageName}.fileprovider",
-                        bundle
-                    )
-                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                        type = "application/zip"
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }
-                    context.startActivity(Intent.createChooser(shareIntent, "Share capture bundle"))
-                } catch (error: Exception) {
-                    stats = stats.copy(status = "Export failed: ${error.message ?: error.javaClass.simpleName}")
-                } catch (error: LinkageError) {
-                    stats = stats.copy(status = "Export failed: ${error.javaClass.simpleName}")
-                }
-            }) {
-                Text("Finish capture & export")
-            }
-            Spacer(Modifier.height(12.dp))
-
             if (hasCameraPermission) {
                 AndroidView(
                     modifier = Modifier
@@ -154,63 +123,22 @@ private fun CaptureScreen() {
                 )
             } else {
                 Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Camera access is required for tracking.", color = Color.White)
-                        Spacer(Modifier.height(12.dp))
-                        Button(onClick = {
-                            permissionLauncher.launch(Manifest.permission.CAMERA)
-                        }) {
-                            Text("Grant camera access")
-                        }
+                    Button(onClick = {
+                        permissionLauncher.launch(Manifest.permission.CAMERA)
+                    }) {
+                        Text("Grant camera permission")
                     }
                 }
             }
-
-            Spacer(Modifier.height(12.dp))
-            Text(stats.status, color = Color(0xFF73D6A5), fontSize = 13.sp)
-            Text("Camera frames: ${stats.frameCount}  |  ${stats.cameraRateHz} Hz", color = Color.White)
-            Text("Camera max frame gap: ${stats.cameraMaxGapMs} ms  |  timestamp errors: ${stats.cameraTimestampErrors}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
-            Text("Analysis stream: ${stats.analysisStreamSummary}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
-            Text("Features detected: ${stats.featureCount}  |  Tracked: ${stats.trackedFeatureCount}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
-            Text("Mean image motion: ${stats.meanMotionX}, ${stats.meanMotionY} px/frame", color = Color(0xFFB9C5D2), fontSize = 12.sp)
+            Text(status, color = Color(0xFF73D6A5), fontSize = 14.sp)
             Text(
-                "Gyroscope (rad/s): ${stats.gyroX}, ${stats.gyroY}, ${stats.gyroZ}",
+                "Please keep this screen open for 30 seconds after the preview appears.",
                 color = Color(0xFFB9C5D2),
                 fontSize = 12.sp
             )
-            Text(
-                "Accelerometer (m/s²): ${stats.accelX}, ${stats.accelY}, ${stats.accelZ}",
-                color = Color(0xFFB9C5D2),
-                fontSize = 12.sp
-            )
-            Text(
-                "Gyro delta / frame (rad): ${stats.gyroDeltaX}, ${stats.gyroDeltaY}, ${stats.gyroDeltaZ}",
-                color = Color(0xFFB9C5D2),
-                fontSize = 12.sp
-            )
-            Text("Gravity estimate (m/s², low-pass): ${stats.gravityEstimate}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
-            Text("Observed IMU rate (Hz): gyro ${stats.gyroRateHz}  |  accel ${stats.accelRateHz}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
-            Text("Largest sensor interval (ms): gyro ${stats.gyroMaxGapMs}  |  accel ${stats.accelMaxGapMs}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
-            Text("Camera calibration: ${stats.cameraCalibrationStatus}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
-            Text("Accel Δ velocity (m/s): ${stats.accelDeltaVelocity}  |  valid: ${stats.accelDeltaValid}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
-            Text("Accel Δ position (m, approximate): ${stats.accelDeltaPosition}", color = Color(0xFFB9C5D2), fontSize = 12.sp)
-            Text(
-                "IMU interval: ${stats.imuIntervalMs} ms  |  samples: ${stats.imuSampleCount}  |  valid: ${stats.imuDeltaValid}",
-                color = Color(0xFFB9C5D2),
-                fontSize = 12.sp
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text("Camera clock: ${stats.cameraTimestampSource}", color = Color(0xFF778596), fontSize = 11.sp)
-                Text("API 26+", color = Color(0xFF778596), fontSize = 11.sp)
-            }
         }
     }
 }
