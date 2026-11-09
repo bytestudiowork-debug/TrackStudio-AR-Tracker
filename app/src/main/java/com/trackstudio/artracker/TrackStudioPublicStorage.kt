@@ -28,13 +28,6 @@ internal object TrackStudioPublicStorage {
             if (copyFile(context, source, "$safeProjectName/$relative")) copied++
         }
 
-        // Camera/IMU diagnostics are stored in app-private files/sessions.
-        val sessions = File(context.filesDir, "sessions")
-        if (sessions.isDirectory) {
-            sessions.walkTopDown().filter { it.isFile }.forEach { source ->
-                if (copyFile(context, source, "$safeProjectName/Tracking Data/Sessions/" + source.name)) copied++
-            }
-        }
         return copied
     }
 
