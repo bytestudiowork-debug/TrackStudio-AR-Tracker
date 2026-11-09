@@ -2,6 +2,7 @@ package com.trackstudio.artracker
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
@@ -32,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import java.text.SimpleDateFormat
@@ -63,6 +65,9 @@ private fun TrackStudioArApp() {
     var selected by remember { mutableStateOf<TrackStudioProject?>(null) }
     var createDialog by remember { mutableStateOf(false) }
     var projectName by remember { mutableStateOf("") }
+    var renameTarget by remember { mutableStateOf<TrackStudioProject?>(null) }
+    var renameValue by remember { mutableStateOf("") }
+    var deleteTarget by remember { mutableStateOf<TrackStudioProject?>(null) }
     var hasPermission by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
     var cameraStatus by remember { mutableStateOf("Camera is ready") }
     val cameraController = remember {
@@ -103,7 +108,10 @@ private fun TrackStudioArApp() {
                 Screen.PROJECTS -> ProjectsScreen(
                     projects, { screen = Screen.HOME },
                     { projects = repository.listProjects() },
-                    { selected = it; screen = Screen.DETAIL }
+                    { selected = it; screen = Screen.DETAIL },
+                    { renameTarget = it; renameValue = it.name },
+                    { project -> shareProject(context, repository, project) },
+                    { deleteTarget = it }
                 )
                 Screen.DETAIL -> {
                     val p = selected
@@ -152,6 +160,44 @@ private fun TrackStudioArApp() {
             dismissButton = { TextButton(onClick = { createDialog = false }) { Text("Cancel") } }
         )
     }
+
+    if (renameTarget != null) {
+        val target = renameTarget!!
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Rename project") },
+            text = {
+                OutlinedTextField(
+                    value = renameValue, onValueChange = { renameValue = it },
+                    label = { Text("Project name") }, singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(enabled = renameValue.isNotBlank(), onClick = {
+                    runCatching { repository.renameProject(target, renameValue) }
+                        .onSuccess { projects = repository.listProjects(); renameTarget = null }
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Cancel") } }
+        )
+    }
+
+    if (deleteTarget != null) {
+        val target = deleteTarget!!
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Delete project?") },
+            text = { Text("“${target.name}” and all files inside it will be permanently deleted.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    runCatching { repository.deleteProject(target) }
+                        .onSuccess { projects = repository.listProjects(); deleteTarget = null }
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } }
+        )
+    }
+
 }
 
 @Composable
@@ -220,8 +266,12 @@ private fun PageHeader(title: String, subtitle: String, back: () -> Unit) {
 @Composable
 private fun ProjectsScreen(
     projects: List<TrackStudioProject>, back: () -> Unit,
-    refresh: () -> Unit, openProject: (TrackStudioProject) -> Unit
+    refresh: () -> Unit, openProject: (TrackStudioProject) -> Unit,
+    renameProject: (TrackStudioProject) -> Unit,
+    shareProject: (TrackStudioProject) -> Unit,
+    deleteProject: (TrackStudioProject) -> Unit
 ) {
+    var menuProjectId by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         PageHeader("Projects", "Your live tracking shoots", back)
         if (projects.isEmpty()) {
@@ -230,15 +280,26 @@ private fun ProjectsScreen(
         } else {
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 projects.forEach { p ->
-                    Card(Modifier.fillMaxWidth().clickable { openProject(p) },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("▣", Modifier.padding(end = 12.dp), color = MaterialTheme.colorScheme.primary, fontSize = 22.sp)
-                            Column(Modifier.weight(1f)) {
-                                Text(p.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text("${p.recordingCount} recordings · ${dateText(p.createdAt)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(Modifier.weight(1f).clickable { openProject(p) }, verticalAlignment = Alignment.CenterVertically) {
+                                Text("▣", Modifier.padding(end = 12.dp), color = MaterialTheme.colorScheme.primary, fontSize = 22.sp)
+                                Column(Modifier.weight(1f)) {
+                                    Text(p.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("${p.recordingCount} recordings · ${dateText(p.createdAt)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Text("›", color = MaterialTheme.colorScheme.primary, fontSize = 24.sp)
                             }
-                            Text("›", color = MaterialTheme.colorScheme.primary, fontSize = 24.sp)
+                            Box {
+                                IconButton(onClick = { menuProjectId = p.id }) {
+                                    Text("⋮", fontSize = 25.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                DropdownMenu(expanded = menuProjectId == p.id, onDismissRequest = { menuProjectId = null }) {
+                                    DropdownMenuItem(text = { Text("Rename") }, onClick = { menuProjectId = null; renameProject(p) })
+                                    DropdownMenuItem(text = { Text("Share") }, onClick = { menuProjectId = null; shareProject(p) })
+                                    DropdownMenuItem(text = { Text("Delete", color = MaterialTheme.colorScheme.error) }, onClick = { menuProjectId = null; deleteProject(p) })
+                                }
+                            }
                         }
                     }
                 }
@@ -449,3 +510,24 @@ private fun AppSettingsScreen(themeMode: String, setTheme: (String) -> Unit, bac
 
 private fun dateText(time: Long): String =
     SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(time))
+
+
+private fun shareProject(
+    context: Context,
+    repository: TrackStudioProjectRepository,
+    project: TrackStudioProject
+) {
+    runCatching {
+        val archive = repository.exportProjectZip(project, context.cacheDir)
+        val uri = FileProvider.getUriForFile(
+            context, "${context.packageName}.fileprovider", archive
+        )
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/zip"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, "TrackStudio project: ${project.name}")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Share project"))
+    }
+}
