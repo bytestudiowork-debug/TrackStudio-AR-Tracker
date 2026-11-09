@@ -132,7 +132,7 @@ class CameraImuCaptureController(
         if (running && view.isAvailable) openCameraIfReady()
     }
 
-    fun start(project: TrackStudioProject) {
+    internal fun start(project: TrackStudioProject) {
         if (running) return
         try {
             startCapture(project)
@@ -490,7 +490,7 @@ class CameraImuCaptureController(
 
 
     /** Records video and diagnostic frames through the same Camera2 session. */
-    fun startRecording(project: TrackStudioProject, onState: (Boolean, String) -> Unit) {
+    internal fun startRecording(project: TrackStudioProject, onState: (Boolean, String) -> Unit) {
         cameraHandler?.post {
             val camera = cameraDevice
             val preview = previewSurface
