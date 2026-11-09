@@ -199,6 +199,9 @@ internal class CameraPreviewDiagnosticController(
         }
         recording = false
         recordingStarting = false
+        try { captureSession?.stopRepeating() } catch (_: Exception) { }
+        try { captureSession?.close() } catch (_: Exception) { }
+        captureSession = null
         releaseRecorder()
         if (camera != null && preview != null && running) configurePreviewSession(camera, preview)
         publish("Recording stopped")
