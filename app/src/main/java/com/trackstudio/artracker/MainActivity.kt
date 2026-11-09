@@ -124,7 +124,8 @@ private fun TrackStudioArApp() {
                     if (p == null) screen = Screen.HOME
                     else CameraScreen(p, hasPermission, cameraStatus, cameraController,
                         { screen = Screen.DETAIL },
-                        { permissionLauncher.launch(Manifest.permission.CAMERA) })
+                        { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                        { cameraStatus = it })
                 }
                 Screen.CAMERA_SETTINGS -> CameraSettingsScreen { screen = Screen.HOME }
                 Screen.APP_SETTINGS -> AppSettingsScreen(themeMode, {
@@ -334,8 +335,10 @@ private fun ProjectDetailScreen(project: TrackStudioProject, back: () -> Unit) {
 @Composable
 private fun CameraScreen(
     project: TrackStudioProject, hasPermission: Boolean, status: String,
-    controller: CameraPreviewDiagnosticController, back: () -> Unit, requestPermission: () -> Unit
+    controller: CameraPreviewDiagnosticController, back: () -> Unit,
+    requestPermission: () -> Unit, onStatus: (String) -> Unit
 ) {
+    val context = LocalContext.current
     var isRecording by remember(project.id) { mutableStateOf(false) }
     var torchOn by remember(project.id) { mutableStateOf(false) }
     val mainHandler = remember { Handler(context.mainLooper) }
@@ -383,14 +386,14 @@ private fun CameraScreen(
                     color = if (torchOn) Color(0xFFFFC857) else Color.Black.copy(alpha = .55f)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Text(if (torchOn) "⚡" else "♧", color = if (torchOn) Color.Black else Color.White, fontSize = 25.sp)
+                        Text("⚡", color = if (torchOn) Color.Black else Color.White, fontSize = 25.sp)
                     }
                 }
                 Surface(
                     modifier = Modifier.size(76.dp).clickable {
                         if (isRecording) {
                             controller.stopRecording { active, message ->
-                                mainHandler.post { isRecording = active; cameraStatus = message }
+                                mainHandler.post { isRecording = active; onStatus(message) }
                             }
                         } else {
                             controller.startRecording(project) { active, message ->
