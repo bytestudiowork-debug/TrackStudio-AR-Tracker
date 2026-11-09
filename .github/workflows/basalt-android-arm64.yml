@@ -50,6 +50,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build
 
+      - name: Install pinned CMake from PyPI
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cmake-venv"
+          "$RUNNER_TEMP/cmake-venv/bin/python" -m pip install --disable-pip-version-check "cmake==3.31.10"
+          echo "$RUNNER_TEMP/cmake-venv/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/cmake-venv/bin/cmake" --version
+
       - name: Configure build tools
         run: |
           echo "VCPKG_ROOT=$GITHUB_WORKSPACE/third_party/basalt/thirdparty/vcpkg" >> "$GITHUB_ENV"
