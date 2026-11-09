@@ -117,11 +117,14 @@ private fun TrackStudioArApp() {
     BackHandler(screen != Screen.HOME) {
         if (screen == Screen.CAMERA) {
             val current = selected
-            cameraController.stopRecording { _, _ ->
+            cameraController.stopRecording { wasRecording, message ->
                 Handler(context.mainLooper).post {
                     projects = repository.listProjects()
                     selected = current?.let { old ->
                         repository.listProjects().firstOrNull { it.id == old.id } ?: old
+                    }
+                    if (wasRecording && message == "Recording saved" && current != null) {
+                        requestPublicExport(current)
                     }
                     screen = Screen.DETAIL
                 }
