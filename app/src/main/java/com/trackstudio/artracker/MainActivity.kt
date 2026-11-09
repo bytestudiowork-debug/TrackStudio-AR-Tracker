@@ -8,6 +8,8 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.MediaRecorder
 import android.os.Handler
+import android.os.Build
+import android.widget.Toast
 import android.view.TextureView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -79,6 +81,39 @@ private fun TrackStudioArApp() {
         cameraStatus = if (granted) "Permission granted — preparing camera" else "Camera permission is required"
     }
 
+    var pendingPublicExport by remember { mutableStateOf<TrackStudioProject?>(null) }
+    val performPublicExport: (TrackStudioProject) -> Unit = { target ->
+        Thread({
+            runCatching { TrackStudioPublicStorage.exportProject(context.applicationContext, target) }
+                .onSuccess { count ->
+                    Handler(context.mainLooper).post {
+                        Toast.makeText(context, "Saved " + count + " files to Documents/TrackStudio/" + target.name, Toast.LENGTH_LONG).show()
+                    }
+                }
+                .onFailure { error ->
+                    Handler(context.mainLooper).post {
+                        Toast.makeText(context, "Could not export: " + error.message, Toast.LENGTH_LONG).show()
+                    }
+                }
+        }, "TrackStudio-Public-Export").start()
+    }
+    val storagePermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val target = pendingPublicExport
+        pendingPublicExport = null
+        if (granted && target != null) performPublicExport(target)
+        else if (!granted) Toast.makeText(context, "Storage permission is needed to save into Documents", Toast.LENGTH_LONG).show()
+    }
+    val requestPublicExport: (TrackStudioProject) -> Unit = { target ->
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingPublicExport = target
+            storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        } else {
+            performPublicExport(target)
+        }
+    }
+
     BackHandler(screen != Screen.HOME) {
         if (screen == Screen.CAMERA) {
             val current = selected
@@ -124,6 +159,7 @@ private fun TrackStudioArApp() {
                     { selected = it; screen = Screen.DETAIL },
                     { renameTarget = it; renameValue = it.name },
                     { project -> shareProject(context, repository, project) },
+                    { project -> requestPublicExport(project) },
                     { deleteTarget = it }
                 )
                 Screen.DETAIL -> {
@@ -140,12 +176,14 @@ private fun TrackStudioArApp() {
                                 Handler(context.mainLooper).post {
                                     projects = repository.listProjects()
                                     selected = repository.listProjects().firstOrNull { it.id == p.id } ?: p
+                                    requestPublicExport(p)
                                     screen = Screen.DETAIL
                                 }
                             }
                         },
                         { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                        { cameraStatus = it })
+                        { cameraStatus = it },
+                        { savedProject -> requestPublicExport(savedProject) })
                 }
                 Screen.CAMERA_SETTINGS -> CameraSettingsScreen { screen = Screen.HOME }
                 Screen.APP_SETTINGS -> AppSettingsScreen(themeMode, {
@@ -291,6 +329,7 @@ private fun ProjectsScreen(
     refresh: () -> Unit, openProject: (TrackStudioProject) -> Unit,
     renameProject: (TrackStudioProject) -> Unit,
     shareProject: (TrackStudioProject) -> Unit,
+    exportProject: (TrackStudioProject) -> Unit,
     deleteProject: (TrackStudioProject) -> Unit
 ) {
     var menuProjectId by remember { mutableStateOf<String?>(null) }
@@ -319,6 +358,7 @@ private fun ProjectsScreen(
                                 DropdownMenu(expanded = menuProjectId == p.id, onDismissRequest = { menuProjectId = null }) {
                                     DropdownMenuItem(text = { Text("Rename") }, onClick = { menuProjectId = null; renameProject(p) })
                                     DropdownMenuItem(text = { Text("Share") }, onClick = { menuProjectId = null; shareProject(p) })
+                                    DropdownMenuItem(text = { Text("Save to device folder") }, onClick = { menuProjectId = null; exportProject(p) })
                                     DropdownMenuItem(text = { Text("Delete", color = MaterialTheme.colorScheme.error) }, onClick = { menuProjectId = null; deleteProject(p) })
                                 }
                             }
@@ -356,7 +396,8 @@ private fun ProjectDetailScreen(project: TrackStudioProject, back: () -> Unit) {
 private fun CameraScreen(
     project: TrackStudioProject, hasPermission: Boolean, status: String,
     controller: CameraPreviewDiagnosticController, back: () -> Unit,
-    requestPermission: () -> Unit, onStatus: (String) -> Unit
+    requestPermission: () -> Unit, onStatus: (String) -> Unit,
+    onExportProject: (TrackStudioProject) -> Unit
 ) {
     val context = LocalContext.current
     var isRecording by remember(project.id) { mutableStateOf(false) }
@@ -413,7 +454,11 @@ private fun CameraScreen(
                     modifier = Modifier.size(76.dp).clickable {
                         if (isRecording) {
                             controller.stopRecording { active, message ->
-                                mainHandler.post { isRecording = active; onStatus(message) }
+                                mainHandler.post {
+                                    isRecording = active
+                                    onStatus(message)
+                                    if (!active && message == "Recording saved") onExportProject(project)
+                                }
                             }
                         } else {
                             controller.startRecording(project) { active, message ->
