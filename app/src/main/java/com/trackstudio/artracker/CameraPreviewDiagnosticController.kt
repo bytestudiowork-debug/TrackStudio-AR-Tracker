@@ -190,7 +190,12 @@ internal class CameraPreviewDiagnosticController(
         val camera = cameraDevice
         val preview = previewSurface
         if (recording) {
-            try { mediaRecorder?.stop() } catch (_: RuntimeException) { recordingFile?.delete() }
+            try {
+                mediaRecorder?.stop()
+            } catch (_: RuntimeException) {
+                recordingFile?.delete()
+                recordingDirectory?.deleteRecursively()
+            }
         }
         recording = false
         recordingStarting = false
