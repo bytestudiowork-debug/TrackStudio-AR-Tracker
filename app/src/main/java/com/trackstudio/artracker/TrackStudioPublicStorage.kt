@@ -2,6 +2,7 @@ package com.trackstudio.artracker
 
 import android.content.ContentValues
 import android.content.Context
+import android.content.ContentUris
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -41,16 +42,29 @@ internal object TrackStudioPublicStorage {
         val cleanRelativePath = relativePath.replace('\\', '/')
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val resolver = context.contentResolver
+            val relativeFolder = Environment.DIRECTORY_DOCUMENTS + "/TrackStudio/" +
+                cleanRelativePath.substringBeforeLast('/', "")
+            val collection: Uri = MediaStore.Files.getContentUri("external")
+            // Replace a previous export with the same path instead of creating duplicate entries.
+            resolver.query(
+                collection,
+                arrayOf(MediaStore.MediaColumns._ID),
+                MediaStore.MediaColumns.DISPLAY_NAME + "=? AND " + MediaStore.MediaColumns.RELATIVE_PATH + "=?",
+                arrayOf(source.name, relativeFolder),
+                null
+            )?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                while (cursor.moveToNext()) {
+                    resolver.delete(ContentUris.withAppendedId(collection, cursor.getLong(idColumn)), null, null)
+                }
+            }
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, source.name)
                 put(MediaStore.MediaColumns.MIME_TYPE, mimeType(source))
-                put(MediaStore.MediaColumns.RELATIVE_PATH,
-                    Environment.DIRECTORY_DOCUMENTS + "/TrackStudio/" +
-                        cleanRelativePath.substringBeforeLast('/', ""))
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relativeFolder)
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
-            val uri: Uri = resolver.insert(MediaStore.Files.getContentUri("external"), values)
-                ?: return false
+            val uri: Uri = resolver.insert(collection, values) ?: return false
             try {
                 resolver.openOutputStream(uri, "w")?.use { output ->
                     FileInputStream(source).use { input -> input.copyTo(output) }
