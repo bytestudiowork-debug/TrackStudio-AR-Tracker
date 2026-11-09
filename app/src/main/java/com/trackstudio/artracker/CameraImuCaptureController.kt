@@ -217,8 +217,7 @@ class CameraImuCaptureController(
             publish("Capture started — missing " + listOfNotNull(
                 if (!gyroRegistered) "gyroscope" else null,
                 if (!accelRegistered) "accelerometer" else null
-            ).joinToString(" and "))
-        }
+            ).joinToString(" and "))        }
 
         publish("Starting camera and motion sensors")
         openCameraIfReady()
@@ -437,8 +436,7 @@ class CameraImuCaptureController(
                     publish("Camera error: $error")
                 }
             }, cameraHandler)
-        } catch (_: SecurityException) {
-            publish("Camera permission is missing")
+        } catch (_: SecurityException) {            publish("Camera permission is missing")
         } catch (error: Exception) {
             publish("Camera setup failed: ${error.javaClass.simpleName}")
         }
@@ -469,7 +467,7 @@ class CameraImuCaptureController(
                                 set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                                applyImageQualitySettings(this, characteristics)
+                                activeCameraCharacteristics?.let { applyImageQualitySettings(this, it) }
                             }.build()
                             session.setRepeatingRequest(request, null, cameraHandler)
                             publish("Camera + IMU capture running")
@@ -657,8 +655,7 @@ class CameraImuCaptureController(
         }
     }
 
-    private fun releaseVideoRecorder() {
-        try { recorderSurface?.release() } catch (_: Exception) { }
+    private fun releaseVideoRecorder() {        try { recorderSurface?.release() } catch (_: Exception) { }
         recorderSurface = null
         try { mediaRecorder?.reset() } catch (_: Exception) { }
         try { mediaRecorder?.release() } catch (_: Exception) { }
@@ -877,8 +874,7 @@ class CameraImuCaptureController(
             context = context,
             startedAtUnixMs = sessionStartedAtUnixMs,
             cameraId = activeCameraId,
-            characteristics = activeCameraCharacteristics,
-            gyro = gyroSensor,
+            characteristics = activeCameraCharacteristics,            gyro = gyroSensor,
             accelerometer = accelerometerSensor,
             gyroDiagnostics = gyroDiagnostics.snapshot(),
             accelDiagnostics = accelDiagnostics.snapshot(),
@@ -913,7 +909,7 @@ class CameraImuCaptureController(
         builder: CaptureRequest.Builder,
         characteristics: CameraCharacteristics
     ) {
-        val requestKeys = characteristics.availableRequestKeys ?: emptyList()
+        val requestKeys = characteristics.availableCaptureRequestKeys ?: emptyList()
         fun supports(key: CaptureRequest.Key<*>) = requestKeys.contains(key)
 
         if (supports(CaptureRequest.CONTROL_AWB_MODE)) {
@@ -958,16 +954,6 @@ class CameraImuCaptureController(
     }
 
     private fun choosePreviewSize(sizes: Array<Size>): Size {
-        // Use a full-HD-class preview when the device exposes one. The previous scoring
-        // function actively preferred 1280x720 even when 1920x1080 was available.
-        val bounded = sizes.filter { it.width <= 1920 && it.height <= 1080 }
-        val matchingAspect = bounded.filter {
-            abs((it.width.toFloat() / it.height) - (16f / 9f)) <= 0.04f
-        }
-        return (matchingAspect.ifEmpty { bounded }).maxByOrNull {
-            it.width.toLong() * it.height
-        } ?: sizes.maxByOrNull { it.width.toLong() * it.height } ?: Size(1280, 720)
-    }
         // Use a full-HD-class preview when the device exposes one. The previous scoring
         // function actively preferred 1280x720 even when 1920x1080 was available.
         val bounded = sizes.filter { it.width <= 1920 && it.height <= 1080 }
