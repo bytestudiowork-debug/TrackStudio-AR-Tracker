@@ -2,6 +2,8 @@ package com.trackstudio.artracker
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 import java.io.File
 
@@ -20,14 +22,13 @@ class BasaltFrameArchiveRandomAccessTest {
 
             BasaltFrameArchiveRandomAccess(file).use { reader ->
                 assertEquals(2, reader.frameCount)
-                val frame = reader.readFrame(1)!!
-                try {
-                    val actual = ByteArray(6)
-                    frame.get(0, 0, actual)
-                    assertArrayEquals(second, actual)
-                } finally {
-                    frame.release()
-                }
+                assertNull(reader.readFrameBytes(-1))
+                val frame = reader.readFrameBytes(1)
+                assertNotNull(frame)
+                assertEquals(20L, frame!!.timestampNs)
+                assertEquals(3, frame.width)
+                assertEquals(2, frame.height)
+                assertArrayEquals(second, frame.pixels)
             }
         } finally {
             file.delete()

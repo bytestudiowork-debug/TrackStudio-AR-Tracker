@@ -15,6 +15,13 @@ import java.util.zip.InflaterInputStream
  * at a time so long recordings do not have to be loaded into RAM.
  */
 internal class BasaltFrameArchiveRandomAccess(private val source: java.io.File) : Closeable {
+    internal data class FrameData(
+        val timestampNs: Long,
+        val width: Int,
+        val height: Int,
+        val pixels: ByteArray
+    )
+
     private data class Entry(
         val timestampNs: Long,
         val width: Int,
@@ -40,8 +47,13 @@ internal class BasaltFrameArchiveRandomAccess(private val source: java.io.File) 
         }
     }
 
+    /**
+     * Pure Kotlin archive read path. Keeping decompression/checksum validation
+     * independent from OpenCV lets JVM unit tests verify the real archive format
+     * without requiring Android native OpenCV libraries.
+     */
     @Synchronized
-    fun readFrame(index: Int): Mat? {
+    fun readFrameBytes(index: Int): FrameData? {
         val entry = entries.getOrNull(index) ?: return null
         file.seek(entry.payloadOffset)
         val compressed = ByteArray(entry.compressedBytes)
@@ -59,9 +71,14 @@ internal class BasaltFrameArchiveRandomAccess(private val source: java.io.File) 
         }
         val checksum = CRC32().apply { update(pixels) }.value.toInt()
         if (checksum != entry.checksum) throw IOException("Frame checksum mismatch at index $index")
+        return FrameData(entry.timestampNs, entry.width, entry.height, pixels)
+    }
 
-        return Mat(entry.height, entry.width, CvType.CV_8UC1).also { mat ->
-            mat.put(0, 0, pixels)
+    @Synchronized
+    fun readFrame(index: Int): Mat? {
+        val frame = readFrameBytes(index) ?: return null
+        return Mat(frame.height, frame.width, CvType.CV_8UC1).also { mat ->
+            mat.put(0, 0, frame.pixels)
         }
     }
 

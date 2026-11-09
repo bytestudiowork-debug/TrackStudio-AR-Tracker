@@ -5,8 +5,12 @@ on:
   push:
     branches: [main]
     paths:
+      - "app/**"
       - "third_party/basalt-android/**"
-      - "app/src/main/java/com/trackstudio/artracker/BasaltNativeBridge.kt"
+      - "third_party/basalt/**"
+      - "*.gradle.kts"
+      - "gradle.properties"
+      - "gradle/**"
       - ".github/workflows/basalt-android-arm64.yml"
 
 concurrency:
