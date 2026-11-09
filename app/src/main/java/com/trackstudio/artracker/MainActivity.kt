@@ -136,13 +136,11 @@ private fun TrackStudioArApp() {
                     if (p == null) screen = Screen.HOME
                     else CameraScreen(p, hasPermission, cameraStatus, cameraController,
                         {
-                            controllerStopAndReturn@ run {
-                                cameraController.stopRecording { _, _ ->
-                                    Handler(context.mainLooper).post {
-                                        projects = repository.listProjects()
-                                        selected = repository.listProjects().firstOrNull { it.id == p.id } ?: p
-                                        screen = Screen.DETAIL
-                                    }
+                            cameraController.stopRecording { _, _ ->
+                                Handler(context.mainLooper).post {
+                                    projects = repository.listProjects()
+                                    selected = repository.listProjects().firstOrNull { it.id == p.id } ?: p
+                                    screen = Screen.DETAIL
                                 }
                             }
                         },
