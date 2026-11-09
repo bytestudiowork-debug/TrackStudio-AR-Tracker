@@ -609,17 +609,24 @@ private fun shareProject(
     repository: TrackStudioProjectRepository,
     project: TrackStudioProject
 ) {
-    runCatching {
-        val archive = repository.exportProjectZip(project, context.cacheDir)
-        val uri = FileProvider.getUriForFile(
-            context, "${context.packageName}.fileprovider", archive
-        )
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "application/zip"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, "TrackStudio project: ${project.name}")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    val appContext = context.applicationContext
+    Thread({
+        val result = runCatching { repository.exportProjectZip(project, appContext.cacheDir) }
+        Handler(context.mainLooper).post {
+            result.onSuccess { archive ->
+                runCatching {
+                    val uri = FileProvider.getUriForFile(
+                        context, "${context.packageName}.fileprovider", archive
+                    )
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "application/zip"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        putExtra(Intent.EXTRA_SUBJECT, "TrackStudio project: ${project.name}")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(Intent.createChooser(intent, "Share project"))
+                }
+            }
         }
-        context.startActivity(Intent.createChooser(intent, "Share project"))
-    }
+    }, "TrackStudio-Project-Export").start()
 }
