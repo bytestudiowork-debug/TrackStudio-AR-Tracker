@@ -506,42 +506,76 @@ class CameraImuCaptureController(
                 return@post
             }
             try {
-                val cameraId = activeCameraId ?: throw IllegalStateException("Camera is not ready")
                 val map = activeCameraCharacteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                     ?: throw IllegalStateException("Recording sizes are unavailable")
                 val sizes = map.getOutputSizes(MediaRecorder::class.java)
                     ?: throw IllegalStateException("Video recording is not supported")
-                // Prefer 1080p when available; keep the tracking YUV stream independent at
-                // its smaller analysis resolution. Avoid forcing every recording to 720p.
-                val boundedVideoSizes = sizes.filter { it.width <= 1920 && it.height <= 1080 }
-                val size = boundedVideoSizes.maxByOrNull { it.width.toLong() * it.height }
-                    ?: sizes.maxByOrNull { it.width.toLong() * it.height }
-                    ?: throw IllegalStateException("No compatible video size")
+                // Try the best practical size first, then progressively fall back if this
+                // device cannot run preview + analysis + encoder at that resolution.
+                val bounded = sizes.filter { it.width <= 1920 && it.height <= 1080 }
+                val candidates = (bounded.ifEmpty { sizes.toList() })
+                    .distinctBy { it.width to it.height }
+                    .sortedByDescending { it.width.toLong() * it.height }
+                if (candidates.isEmpty()) throw IllegalStateException("No compatible video size")
                 val directory = File(project.directory, "Recordings/recording-${System.currentTimeMillis()}")
                 if (!directory.mkdirs()) throw IllegalStateException("Could not create recording folder")
-                val output = File(directory, "video.mp4")
-                val recorder = MediaRecorder()
-                mediaRecorder = recorder
-                recordingFile = output
-                recorder.apply {
-                    setVideoSource(MediaRecorder.VideoSource.SURFACE)
-                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                    setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-                    setVideoSize(size.width, size.height)
-                    setVideoFrameRate(30)
-                    setOutputFile(output.absolutePath)
-                    setOrientationHint(90)
-                    prepare()
-                }
-                val input = recorder.surface
-                recorderSurface = input
                 captureSession?.close()
                 captureSession = null
-                camera.createCaptureSession(listOf(preview, reader.surface, input), object : CameraCaptureSession.StateCallback() {
+                configureRecordingAtSize(camera, preview, reader, candidates, 0, directory, onState)
+            } catch (error: Exception) {
+                releaseVideoRecorder()
+                if (captureSession == null) configurePreviewSessionAfterRecording(camera, preview, reader)
+                onState(false, "Recording setup failed: ${error.message}")
+            }
+        } ?: onState(false, "Camera is not running")
+    }
+
+    private fun configureRecordingAtSize(
+        camera: CameraDevice,
+        preview: Surface,
+        reader: ImageReader,
+        candidates: List<Size>,
+        candidateIndex: Int,
+        directory: File,
+        onState: (Boolean, String) -> Unit
+    ) {
+        if (!running) {
+            onState(false, "Recording cancelled")
+            return
+        }
+        if (candidateIndex >= candidates.size) {
+            configurePreviewSessionAfterRecording(camera, preview, reader)
+            onState(false, "This camera cannot configure a compatible recording stream")
+            return
+        }
+
+        val size = candidates[candidateIndex]
+        val output = File(directory, "video.mp4")
+        output.delete()
+        try {
+            val recorder = MediaRecorder()
+            mediaRecorder = recorder
+            recordingFile = output
+            recorder.apply {
+                setVideoSource(MediaRecorder.VideoSource.SURFACE)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+                setVideoSize(size.width, size.height)
+                setVideoFrameRate(30)
+                setOutputFile(output.absolutePath)
+                setOrientationHint(90)
+                prepare()
+            }
+            val input = recorder.surface
+            recorderSurface = input
+            camera.createCaptureSession(
+                listOf(preview, reader.surface, input),
+                object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         if (!running) {
                             session.close()
                             releaseVideoRecorder()
+                            output.delete()
                             onState(false, "Recording cancelled")
                             return
                         }
@@ -568,26 +602,34 @@ class CameraImuCaptureController(
                                 .put("diagnosticSession", "capture-$sessionStartedAtUnixMs")
                                 .put("frameArchive", "capture-$sessionStartedAtUnixMs.basalt.frames")
                             File(directory, "recording.json").writeText(json.toString(2), Charsets.UTF_8)
-                            publish("Recording video + camera/IMU diagnostics")
-                            onState(true, "Recording")
+                            publish("Recording video + camera/IMU diagnostics at ${size.width}x${size.height}")
+                            onState(true, "Recording at ${size.width}x${size.height}")
                         } catch (error: Exception) {
                             stopVideoOnCameraThread()
                             onState(false, "Could not start recording: ${error.message}")
                         }
                     }
+
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         session.close()
+                        if (captureSession === session) captureSession = null
                         releaseVideoRecorder()
-                        configurePreviewSessionAfterRecording(camera, preview, reader)
-                        onState(false, "Could not configure video recording session")
+                        output.delete()
+                        // A lower resolution may be supported by older/limited Camera2 HALs.
+                        configureRecordingAtSize(
+                            camera, preview, reader, candidates, candidateIndex + 1, directory, onState
+                        )
                     }
-                }, cameraHandler)
-            } catch (error: Exception) {
-                releaseVideoRecorder()
-                if (captureSession == null) configurePreviewSessionAfterRecording(camera, preview, reader)
-                onState(false, "Recording setup failed: ${error.message}")
-            }
-        } ?: onState(false, "Camera is not running")
+                },
+                cameraHandler
+            )
+        } catch (error: Exception) {
+            releaseVideoRecorder()
+            output.delete()
+            configureRecordingAtSize(
+                camera, preview, reader, candidates, candidateIndex + 1, directory, onState
+            )
+        }
     }
 
     fun stopRecording(onState: (Boolean, String) -> Unit = { _, _ -> }) {
