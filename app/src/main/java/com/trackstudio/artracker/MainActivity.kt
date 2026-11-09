@@ -74,7 +74,7 @@ private fun TrackStudioArApp() {
     var hasPermission by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
     var cameraStatus by remember { mutableStateOf("Camera is ready") }
     val cameraController = remember {
-        CameraPreviewDiagnosticController(context.applicationContext) { cameraStatus = it }
+        CameraImuCaptureController(context.applicationContext) { cameraStatus = it.status }
     }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         hasPermission = granted
@@ -117,15 +117,14 @@ private fun TrackStudioArApp() {
     BackHandler(screen != Screen.HOME) {
         if (screen == Screen.CAMERA) {
             val current = selected
-            cameraController.stopRecording { wasRecording, message ->
+            cameraController.stopRecording { _, _ ->
                 Handler(context.mainLooper).post {
+                    cameraController.stop() // Finalize CSV and .basalt.frames before exporting.
                     projects = repository.listProjects()
                     selected = current?.let { old ->
                         repository.listProjects().firstOrNull { it.id == old.id } ?: old
                     }
-                    if (wasRecording && message == "Recording saved" && current != null) {
-                        requestPublicExport(current)
-                    }
+                    if (current != null) requestPublicExport(current)
                     screen = Screen.DETAIL
                 }
             }
@@ -177,6 +176,7 @@ private fun TrackStudioArApp() {
                         {
                             cameraController.stopRecording { _, _ ->
                                 Handler(context.mainLooper).post {
+                                    cameraController.stop() // Wait for diagnostic writers and archive finalization.
                                     projects = repository.listProjects()
                                     selected = repository.listProjects().firstOrNull { it.id == p.id } ?: p
                                     requestPublicExport(p)
@@ -185,8 +185,7 @@ private fun TrackStudioArApp() {
                             }
                         },
                         { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                        { cameraStatus = it },
-                        { savedProject -> requestPublicExport(savedProject) })
+                        { cameraStatus = it })
                 }
                 Screen.CAMERA_SETTINGS -> CameraSettingsScreen { screen = Screen.HOME }
                 Screen.APP_SETTINGS -> AppSettingsScreen(themeMode, {
@@ -398,9 +397,8 @@ private fun ProjectDetailScreen(project: TrackStudioProject, back: () -> Unit) {
 @Composable
 private fun CameraScreen(
     project: TrackStudioProject, hasPermission: Boolean, status: String,
-    controller: CameraPreviewDiagnosticController, back: () -> Unit,
-    requestPermission: () -> Unit, onStatus: (String) -> Unit,
-    onExportProject: (TrackStudioProject) -> Unit
+    controller: CameraImuCaptureController, back: () -> Unit,
+    requestPermission: () -> Unit, onStatus: (String) -> Unit
 ) {
     val context = LocalContext.current
     var isRecording by remember(project.id) { mutableStateOf(false) }
@@ -410,13 +408,13 @@ private fun CameraScreen(
     DisposableEffect(lifecycle, hasPermission, controller) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> if (hasPermission) controller.start()
+                Lifecycle.Event.ON_RESUME -> if (hasPermission) controller.start(project)
                 Lifecycle.Event.ON_PAUSE -> controller.stop()
                 else -> Unit
             }
         }
         lifecycle.lifecycle.addObserver(observer)
-        if (hasPermission && lifecycle.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) controller.start()
+        if (hasPermission && lifecycle.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) controller.start(project)
         onDispose { lifecycle.lifecycle.removeObserver(observer); controller.stop() }
     }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -460,7 +458,6 @@ private fun CameraScreen(
                                 mainHandler.post {
                                     isRecording = active
                                     onStatus(message)
-                                    if (!active && message == "Recording saved") onExportProject(project)
                                 }
                             }
                         } else {

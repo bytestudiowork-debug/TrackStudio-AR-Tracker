@@ -15,6 +15,7 @@ import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.media.Image
 import android.media.ImageReader
+import android.media.MediaRecorder
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
@@ -104,6 +105,12 @@ class CameraImuCaptureController(
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
+    private var previewSurface: Surface? = null
+    private var recorderSurface: Surface? = null
+    private var mediaRecorder: MediaRecorder? = null
+    private var recordingFile: File? = null
+    @Volatile private var recording = false
+    @Volatile private var torchEnabled = false
     @Volatile private var running = false
     @Volatile private var cameraTimestampSource = "UNKNOWN"
     private var frameCount = 0L
@@ -125,10 +132,10 @@ class CameraImuCaptureController(
         if (running && view.isAvailable) openCameraIfReady()
     }
 
-    fun start() {
+    fun start(project: TrackStudioProject) {
         if (running) return
         try {
-            startCapture()
+            startCapture(project)
         } catch (error: Exception) {
             recoverFromStartFailure(error)
         } catch (error: LinkageError) {
@@ -149,7 +156,7 @@ class CameraImuCaptureController(
         publish("Capture startup failed: ${error.javaClass.simpleName}")
     }
 
-    private fun startCapture() {
+    private fun startCapture(project: TrackStudioProject) {
         if (running) return
         running = true
         NativeFeatureTracker.reset()
@@ -173,7 +180,7 @@ class CameraImuCaptureController(
         sensorHandler = Handler(sensorThread!!.looper)
         loggerThread = HandlerThread("AR-Session-Logger").also { it.start() }
         loggerHandler = Handler(loggerThread!!.looper)
-        val logDir = File(context.filesDir, "sessions").apply { mkdirs() }
+        val logDir = File(project.directory, "Tracking Data/Sessions").apply { mkdirs() }
         val sessionStem = "capture-$sessionStartedAtUnixMs"
         sessionLogFile = File(logDir, "$sessionStem.csv")
         sessionMetadataFile = File(logDir, "$sessionStem.json")
@@ -433,21 +440,23 @@ class CameraImuCaptureController(
         val camera = cameraDevice ?: return
         val texture = view.surfaceTexture ?: return
         val reader = imageReader ?: return
-        val previewSurface = Surface(texture)
+        val preview = Surface(texture)
+        previewSurface = preview
         try {
             camera.createCaptureSession(
-                listOf(previewSurface, reader.surface),
+                listOf(preview, reader.surface),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         if (!running) {
                             session.close()
-                            previewSurface.release()
+                            preview.release()
+                            if (previewSurface === preview) previewSurface = null
                             return
                         }
                         captureSession = session
                         try {
                             val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                                addTarget(previewSurface)
+                                addTarget(preview)
                                 addTarget(reader.surface)
                                 set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                                 set(
@@ -465,19 +474,236 @@ class CameraImuCaptureController(
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         session.close()
-                        previewSurface.release()
+                        preview.release()
+                        if (previewSurface === preview) previewSurface = null
                         publish("Camera session configuration failed")
                     }
                 },
                 cameraHandler
             )
         } catch (error: Exception) {
-            previewSurface.release()
+            preview.release()
+            if (previewSurface === preview) previewSurface = null
             publish("Could not create camera session: ${error.javaClass.simpleName}")
         }
     }
 
+
+    /** Records video and diagnostic frames through the same Camera2 session. */
+    fun startRecording(project: TrackStudioProject, onState: (Boolean, String) -> Unit) {
+        cameraHandler?.post {
+            val camera = cameraDevice
+            val preview = previewSurface
+            val reader = imageReader
+            if (!running || camera == null || preview == null || reader == null || recording) {
+                onState(recording, "Camera is not ready to record")
+                return@post
+            }
+            try {
+                val cameraId = activeCameraId ?: throw IllegalStateException("Camera is not ready")
+                val map = activeCameraCharacteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    ?: throw IllegalStateException("Recording sizes are unavailable")
+                val sizes = map.getOutputSizes(MediaRecorder::class.java)
+                    ?: throw IllegalStateException("Video recording is not supported")
+                val size = sizes.filter { it.width <= 1280 && it.height <= 720 }
+                    .maxByOrNull { it.width.toLong() * it.height }
+                    ?: sizes.minByOrNull { it.width.toLong() * it.height }
+                    ?: throw IllegalStateException("No compatible video size")
+                val directory = File(project.directory, "Recordings/recording-${System.currentTimeMillis()}")
+                if (!directory.mkdirs()) throw IllegalStateException("Could not create recording folder")
+                val output = File(directory, "video.mp4")
+                val recorder = MediaRecorder()
+                mediaRecorder = recorder
+                recordingFile = output
+                recorder.apply {
+                    setVideoSource(MediaRecorder.VideoSource.SURFACE)
+                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                    setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+                    setVideoSize(size.width, size.height)
+                    setVideoFrameRate(30)
+                    setOutputFile(output.absolutePath)
+                    setOrientationHint(90)
+                    prepare()
+                }
+                val input = recorder.surface
+                recorderSurface = input
+                captureSession?.close()
+                captureSession = null
+                camera.createCaptureSession(listOf(preview, reader.surface, input), object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        if (!running) {
+                            session.close()
+                            releaseVideoRecorder()
+                            onState(false, "Recording cancelled")
+                            return
+                        }
+                        captureSession = session
+                        try {
+                            val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                                addTarget(preview)
+                                addTarget(reader.surface)
+                                addTarget(input)
+                                set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                                if (torchEnabled) set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+                            }.build()
+                            session.setRepeatingRequest(request, null, cameraHandler)
+                            recorder.start()
+                            recording = true
+                            val json = org.json.JSONObject()
+                                .put("file", "video.mp4")
+                                .put("startedAtUnixMs", System.currentTimeMillis())
+                                .put("width", size.width).put("height", size.height)
+                                .put("videoCodec", "H.264").put("audio", false)
+                                .put("diagnosticSession", "capture-$sessionStartedAtUnixMs")
+                                .put("frameArchive", "capture-$sessionStartedAtUnixMs.basalt.frames")
+                            File(directory, "recording.json").writeText(json.toString(2), Charsets.UTF_8)
+                            publish("Recording video + camera/IMU diagnostics")
+                            onState(true, "Recording")
+                        } catch (error: Exception) {
+                            stopVideoOnCameraThread()
+                            onState(false, "Could not start recording: ${error.message}")
+                        }
+                    }
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        session.close()
+                        releaseVideoRecorder()
+                        configurePreviewSessionAfterRecording(camera, preview, reader)
+                        onState(false, "Could not configure video recording session")
+                    }
+                }, cameraHandler)
+            } catch (error: Exception) {
+                releaseVideoRecorder()
+                if (captureSession == null) configurePreviewSessionAfterRecording(camera, preview, reader)
+                onState(false, "Recording setup failed: ${error.message}")
+            }
+        } ?: onState(false, "Camera is not running")
+    }
+
+    fun stopRecording(onState: (Boolean, String) -> Unit = { _, _ -> }) {
+        cameraHandler?.post {
+            val wasRecording = recording
+            stopVideoOnCameraThread()
+            onState(false, if (wasRecording) "Recording saved" else "Recording stopped")
+        } ?: onState(false, "Camera is not running")
+    }
+
+    private fun stopVideoOnCameraThread() {
+        val camera = cameraDevice
+        val preview = previewSurface
+        val reader = imageReader
+        if (recording) {
+            try { mediaRecorder?.stop() } catch (_: RuntimeException) { recordingFile?.delete() }
+        }
+        recording = false
+        try { captureSession?.stopRepeating() } catch (_: Exception) { }
+        try { captureSession?.close() } catch (_: Exception) { }
+        captureSession = null
+        releaseVideoRecorder()
+        if (camera != null && preview != null && reader != null && running) {
+            configurePreviewSessionAfterRecording(camera, preview, reader)
+        }
+    }
+
+    private fun releaseVideoRecorder() {
+        try { recorderSurface?.release() } catch (_: Exception) { }
+        recorderSurface = null
+        try { mediaRecorder?.reset() } catch (_: Exception) { }
+        try { mediaRecorder?.release() } catch (_: Exception) { }
+        mediaRecorder = null
+        recordingFile = null
+    }
+
+    private fun configurePreviewSessionAfterRecording(
+        camera: CameraDevice, preview: Surface, reader: ImageReader
+    ) {
+        try {
+            camera.createCaptureSession(listOf(preview, reader.surface), object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {
+                    if (!running) { session.close(); return }
+                    captureSession = session
+                    try {
+                        val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                            addTarget(preview)
+                            addTarget(reader.surface)
+                            set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                            set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                            if (torchEnabled) set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+                        }.build()
+                        session.setRepeatingRequest(request, null, cameraHandler)
+                    } catch (error: Exception) { publish("Preview resume failed: ${error.message}") }
+                }
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    session.close()
+                    publish("Could not restore camera preview")
+                }
+            }, cameraHandler)
+        } catch (error: Exception) { publish("Could not restore camera preview: ${error.message}") }
+    }
+
+    fun toggleTorch(onState: (Boolean) -> Unit) {
+        cameraHandler?.post {
+            val camera = cameraDevice ?: return@post
+            val session = captureSession ?: return@post
+            val preview = previewSurface ?: return@post
+            val reader = imageReader ?: return@post
+            val characteristics = activeCameraCharacteristics ?: return@post
+            if (characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) != true) {
+                publish("Flashlight is not available on this camera")
+                return@post
+            }
+            torchEnabled = !torchEnabled
+            try {
+                val builder = camera.createCaptureRequest(
+                    if (recording) CameraDevice.TEMPLATE_RECORD else CameraDevice.TEMPLATE_PREVIEW
+                ).apply {
+                    addTarget(preview)
+                    if (recording) {
+                        addTarget(reader.surface)
+                        recorderSurface?.let(::addTarget)
+                    } else addTarget(reader.surface)
+                    set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    set(CaptureRequest.FLASH_MODE, if (torchEnabled) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
+                }
+                session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                onState(torchEnabled)
+            } catch (error: Exception) {
+                torchEnabled = false
+                publish("Could not change flashlight: ${error.message}")
+                onState(false)
+            }
+        }
+    }
+
+    fun focus() {
+        cameraHandler?.post {
+            val camera = cameraDevice ?: return@post
+            val session = captureSession ?: return@post
+            val preview = previewSurface ?: return@post
+            try {
+                val request = camera.createCaptureRequest(
+                    if (recording) CameraDevice.TEMPLATE_RECORD else CameraDevice.TEMPLATE_PREVIEW
+                ).apply {
+                    addTarget(preview)
+                    if (recording) {
+                        imageReader?.surface?.let(::addTarget)
+                        recorderSurface?.let(::addTarget)
+                    } else imageReader?.surface?.let(::addTarget)
+                    set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                    set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
+                }
+                session.capture(request.build(), null, cameraHandler)
+            } catch (error: Exception) { publish("Autofocus failed: ${error.message}") }
+        }
+    }
+
     private fun closeCamera() {
+        if (recording) try { mediaRecorder?.stop() } catch (_: RuntimeException) { recordingFile?.delete() }
+        recording = false
+        releaseVideoRecorder()
         try {
             captureSession?.stopRepeating()
         } catch (_: Exception) { }
@@ -487,6 +713,8 @@ class CameraImuCaptureController(
         cameraDevice = null
         imageReader?.close()
         imageReader = null
+        try { previewSurface?.release() } catch (_: Exception) { }
+        previewSurface = null
     }
 
     override fun onSensorChanged(event: SensorEvent) {
