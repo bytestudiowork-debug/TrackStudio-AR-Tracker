@@ -293,10 +293,18 @@ class CameraImuCaptureController(
         }
 
         try {
-            val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
-                cameraManager.getCameraCharacteristics(id)
-                    .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
-            } ?: cameraManager.cameraIdList.firstOrNull()
+            // Prefer the rear camera with the largest physical pixel array. Camera ID order is
+            // vendor-defined, so blindly taking the first rear camera can select a secondary lens.
+            val cameraId = cameraManager.cameraIdList.mapNotNull { id ->
+                val candidate = cameraManager.getCameraCharacteristics(id)
+                if (candidate.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_BACK) {
+                    null
+                } else {
+                    val pixels = candidate.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+                    val area = pixels?.let { it.width.toLong() * it.height.toLong() } ?: 0L
+                    id to area
+                }
+            }.maxByOrNull { it.second }?.first ?: cameraManager.cameraIdList.firstOrNull()
 
             if (cameraId == null) {
                 publish("No camera is available")
@@ -459,11 +467,9 @@ class CameraImuCaptureController(
                                 addTarget(preview)
                                 addTarget(reader.surface)
                                 set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                                set(
-                                    CaptureRequest.CONTROL_AF_MODE,
-                                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
-                                )
+                                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                                applyImageQualitySettings(this, characteristics)
                             }.build()
                             session.setRepeatingRequest(request, null, cameraHandler)
                             publish("Camera + IMU capture running")
@@ -505,9 +511,11 @@ class CameraImuCaptureController(
                     ?: throw IllegalStateException("Recording sizes are unavailable")
                 val sizes = map.getOutputSizes(MediaRecorder::class.java)
                     ?: throw IllegalStateException("Video recording is not supported")
-                val size = sizes.filter { it.width <= 1280 && it.height <= 720 }
-                    .maxByOrNull { it.width.toLong() * it.height }
-                    ?: sizes.minByOrNull { it.width.toLong() * it.height }
+                // Prefer 1080p when available; keep the tracking YUV stream independent at
+                // its smaller analysis resolution. Avoid forcing every recording to 720p.
+                val boundedVideoSizes = sizes.filter { it.width <= 1920 && it.height <= 1080 }
+                val size = boundedVideoSizes.maxByOrNull { it.width.toLong() * it.height }
+                    ?: sizes.maxByOrNull { it.width.toLong() * it.height }
                     ?: throw IllegalStateException("No compatible video size")
                 val directory = File(project.directory, "Recordings/recording-${System.currentTimeMillis()}")
                 if (!directory.mkdirs()) throw IllegalStateException("Could not create recording folder")
@@ -546,6 +554,7 @@ class CameraImuCaptureController(
                                 set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
                                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                                activeCameraCharacteristics?.let { applyImageQualitySettings(this, it) }
                                 if (torchEnabled) set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
                             }.build()
                             session.setRepeatingRequest(request, null, cameraHandler)
@@ -629,6 +638,7 @@ class CameraImuCaptureController(
                             addTarget(reader.surface)
                             set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                             set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                            activeCameraCharacteristics?.let { applyImageQualitySettings(this, it) }
                             if (torchEnabled) set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
                         }.build()
                         session.setRepeatingRequest(request, null, cameraHandler)
@@ -665,6 +675,7 @@ class CameraImuCaptureController(
                     } else addTarget(reader.surface)
                     set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                     set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    characteristics.let { applyImageQualitySettings(this, it) }
                     set(CaptureRequest.FLASH_MODE, if (torchEnabled) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
                 }
                 session.setRepeatingRequest(builder.build(), null, cameraHandler)
@@ -693,6 +704,7 @@ class CameraImuCaptureController(
                     } else imageReader?.surface?.let(::addTarget)
                     set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                    activeCameraCharacteristics?.let { applyImageQualitySettings(this, it) }
                     set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
                 }
                 session.capture(request.build(), null, cameraHandler)
@@ -849,11 +861,80 @@ class CameraImuCaptureController(
     private fun vector(x: Double, y: Double, z: Double): String =
         String.format(Locale.US, "%.3f, %.3f, %.3f", x, y, z)
 
+
+    /**
+     * Ask Camera2 for neutral, high-quality processing where the device advertises support.
+     * The stock camera app may use private vendor tuning that third-party apps cannot access,
+     * but these requests avoid optional effects and prefer the camera HAL's quality modes.
+     */
+    private fun applyImageQualitySettings(
+        builder: CaptureRequest.Builder,
+        characteristics: CameraCharacteristics
+    ) {
+        val requestKeys = characteristics.availableRequestKeys ?: emptyList()
+        fun supports(key: CaptureRequest.Key<*>) = requestKeys.contains(key)
+
+        if (supports(CaptureRequest.CONTROL_AWB_MODE)) {
+            val modes = characteristics.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)
+            if (modes?.contains(CaptureRequest.CONTROL_AWB_MODE_AUTO) == true) {
+                builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            }
+        }
+        if (supports(CaptureRequest.CONTROL_EFFECT_MODE)) {
+            builder.set(CaptureRequest.CONTROL_EFFECT_MODE, CaptureRequest.CONTROL_EFFECT_MODE_OFF)
+        }
+        if (supports(CaptureRequest.CONTROL_SCENE_MODE)) {
+            builder.set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
+        }
+        if (supports(CaptureRequest.EDGE_MODE)) {
+            val modes = characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
+            if (modes?.contains(CaptureRequest.EDGE_MODE_HIGH_QUALITY) == true) {
+                builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
+            }
+        }
+        if (supports(CaptureRequest.NOISE_REDUCTION_MODE)) {
+            val modes = characteristics.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
+            if (modes?.contains(CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY) == true) {
+                builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
+            }
+        }
+        if (supports(CaptureRequest.SHADING_MODE)) {
+            val modes = characteristics.get(CameraCharacteristics.SHADING_AVAILABLE_MODES)
+            if (modes?.contains(CaptureRequest.SHADING_MODE_HIGH_QUALITY) == true) {
+                builder.set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_HIGH_QUALITY)
+            }
+        }
+        if (supports(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE)) {
+            val modes = characteristics.get(CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES)
+            if (modes?.contains(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY) == true) {
+                builder.set(
+                    CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE,
+                    CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY
+                )
+            }
+        }
+    }
+
     private fun choosePreviewSize(sizes: Array<Size>): Size {
-        return sizes.filter { it.width <= 1920 && it.height <= 1080 }
-            .minByOrNull { abs((it.width.toFloat() / it.height) - (16f / 9f)) * 1000 +
-                abs(it.width - 1280) }
-            ?: sizes.first()
+        // Use a full-HD-class preview when the device exposes one. The previous scoring
+        // function actively preferred 1280x720 even when 1920x1080 was available.
+        val bounded = sizes.filter { it.width <= 1920 && it.height <= 1080 }
+        val matchingAspect = bounded.filter {
+            abs((it.width.toFloat() / it.height) - (16f / 9f)) <= 0.04f
+        }
+        return (matchingAspect.ifEmpty { bounded }).maxByOrNull {
+            it.width.toLong() * it.height
+        } ?: sizes.maxByOrNull { it.width.toLong() * it.height } ?: Size(1280, 720)
+    }
+        // Use a full-HD-class preview when the device exposes one. The previous scoring
+        // function actively preferred 1280x720 even when 1920x1080 was available.
+        val bounded = sizes.filter { it.width <= 1920 && it.height <= 1080 }
+        val matchingAspect = bounded.filter {
+            abs((it.width.toFloat() / it.height) - (16f / 9f)) <= 0.04f
+        }
+        return (matchingAspect.ifEmpty { bounded }).maxByOrNull {
+            it.width.toLong() * it.height
+        } ?: sizes.maxByOrNull { it.width.toLong() * it.height } ?: Size(1280, 720)
     }
 
     private fun chooseAnalysisSize(sizes: Array<Size>): Size {
