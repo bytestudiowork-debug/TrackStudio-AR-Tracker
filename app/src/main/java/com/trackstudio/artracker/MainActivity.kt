@@ -408,13 +408,13 @@ private fun CameraScreen(
     DisposableEffect(lifecycle, hasPermission, controller) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> if (hasPermission) controller.start()
+                Lifecycle.Event.ON_RESUME -> if (hasPermission) controller.start(project)
                 Lifecycle.Event.ON_PAUSE -> controller.stop()
                 else -> Unit
             }
         }
         lifecycle.lifecycle.addObserver(observer)
-        if (hasPermission && lifecycle.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) controller.start()
+        if (hasPermission && lifecycle.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) controller.start(project)
         onDispose { lifecycle.lifecycle.removeObserver(observer); controller.stop() }
     }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
