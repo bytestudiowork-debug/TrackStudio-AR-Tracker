@@ -132,10 +132,10 @@ class CameraImuCaptureController(
         if (running && view.isAvailable) openCameraIfReady()
     }
 
-    fun start() {
+    fun start(project: TrackStudioProject) {
         if (running) return
         try {
-            startCapture()
+            startCapture(project)
         } catch (error: Exception) {
             recoverFromStartFailure(error)
         } catch (error: LinkageError) {
@@ -156,7 +156,7 @@ class CameraImuCaptureController(
         publish("Capture startup failed: ${error.javaClass.simpleName}")
     }
 
-    private fun startCapture() {
+    private fun startCapture(project: TrackStudioProject) {
         if (running) return
         running = true
         NativeFeatureTracker.reset()
@@ -180,7 +180,7 @@ class CameraImuCaptureController(
         sensorHandler = Handler(sensorThread!!.looper)
         loggerThread = HandlerThread("AR-Session-Logger").also { it.start() }
         loggerHandler = Handler(loggerThread!!.looper)
-        val logDir = File(context.filesDir, "sessions").apply { mkdirs() }
+        val logDir = File(project.directory, "Tracking Data/Sessions").apply { mkdirs() }
         val sessionStem = "capture-$sessionStartedAtUnixMs"
         sessionLogFile = File(logDir, "$sessionStem.csv")
         sessionMetadataFile = File(logDir, "$sessionStem.json")
@@ -449,7 +449,7 @@ class CameraImuCaptureController(
                     override fun onConfigured(session: CameraCaptureSession) {
                         if (!running) {
                             session.close()
-                            previewSurface.release()
+                            preview.release()
                             return
                         }
                         captureSession = session
@@ -555,6 +555,8 @@ class CameraImuCaptureController(
                                 .put("startedAtUnixMs", System.currentTimeMillis())
                                 .put("width", size.width).put("height", size.height)
                                 .put("videoCodec", "H.264").put("audio", false)
+                                .put("diagnosticSession", "capture-$sessionStartedAtUnixMs")
+                                .put("frameArchive", "capture-$sessionStartedAtUnixMs.basalt.frames")
                             File(directory, "recording.json").writeText(json.toString(2), Charsets.UTF_8)
                             publish("Recording video + camera/IMU diagnostics")
                             onState(true, "Recording")
