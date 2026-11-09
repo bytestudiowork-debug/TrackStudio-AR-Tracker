@@ -39,7 +39,7 @@ internal class TrackStudioReconstructionService {
             try {
                 cameraMatrix.put(
                     0, 0,
-                    doubleArrayOf(
+                    *doubleArrayOf(
                         fx, skew, cx,
                         0.0, fy, cy,
                         0.0, 0.0, 1.0
