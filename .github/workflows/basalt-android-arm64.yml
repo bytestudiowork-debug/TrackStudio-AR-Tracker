@@ -312,9 +312,14 @@ jobs:
           # not used by this app. It is not part of the Android native libraries.
           # Remove only that generated template wrapper before Gradle's security
           # validation scans the workspace; keep validation enabled.
-          find third_party/basalt/thirdparty/vcpkg/buildtrees/opencv4/src \
-            -path '*/platforms/android/gradle-wrapper/gradle/wrapper/gradle-wrapper.jar' \
-            -type f -print -delete
+          OPENCV_BUILD_SRC="third_party/basalt/thirdparty/vcpkg/buildtrees/opencv4/src"
+          if [[ -d "$OPENCV_BUILD_SRC" ]]; then
+            find "$OPENCV_BUILD_SRC" \
+              -path '*/platforms/android/gradle-wrapper/gradle/wrapper/gradle-wrapper.jar' \
+              -type f -print -delete
+          else
+            echo "OpenCV source build tree is absent; no generated Gradle wrapper needs removal."
+          fi
 
       - name: Set up Gradle with dependency cache
         uses: gradle/actions/setup-gradle@v6
