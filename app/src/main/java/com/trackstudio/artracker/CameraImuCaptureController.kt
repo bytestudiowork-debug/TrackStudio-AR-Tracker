@@ -450,6 +450,7 @@ class CameraImuCaptureController(
                         if (!running) {
                             session.close()
                             preview.release()
+                            if (previewSurface === preview) previewSurface = null
                             return
                         }
                         captureSession = session
@@ -574,6 +575,7 @@ class CameraImuCaptureController(
                 }, cameraHandler)
             } catch (error: Exception) {
                 releaseVideoRecorder()
+                if (captureSession == null) configurePreviewSessionAfterRecording(camera, preview, reader)
                 onState(false, "Recording setup failed: ${error.message}")
             }
         } ?: onState(false, "Camera is not running")
