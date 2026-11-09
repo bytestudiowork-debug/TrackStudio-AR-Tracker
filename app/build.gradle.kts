@@ -12,8 +12,8 @@ android {
         applicationId = "com.trackstudio.artracker"
         minSdk = 26
         targetSdk = 34
-        versionCode = 6
-        versionName = "0.6.0-public-export"
+        versionCode = 7
+        versionName = "0.7.0-integrated-capture"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
         externalNativeBuild { cmake { cppFlags += listOf("-std=c++17", "-O3", "-fno-exceptions", "-fno-rtti") } }
     }
