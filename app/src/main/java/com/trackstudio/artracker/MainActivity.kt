@@ -1,144 +1,388 @@
 package com.trackstudio.artracker
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.media.MediaRecorder
 import android.view.TextureView
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+private enum class Screen { HOME, PROJECTS, DETAIL, CAMERA, CAMERA_SETTINGS, APP_SETTINGS }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            MaterialTheme {
-                CameraCompatibilityScreen()
+        setContent { TrackStudioArApp() }
+    }
+}
+
+@Composable
+private fun TrackStudioArApp() {
+    val context = LocalContext.current
+    val repository = remember { TrackStudioProjectRepository(context.applicationContext) }
+    val prefs = remember { context.getSharedPreferences("trackstudio_ar_settings", Context.MODE_PRIVATE) }
+    var themeMode by remember { mutableStateOf(prefs.getString("theme_mode", "system") ?: "system") }
+    val dark = when (themeMode) {
+        "dark" -> true
+        "light" -> false
+        else -> androidx.compose.foundation.isSystemInDarkTheme()
+    }
+    var screen by remember { mutableStateOf(Screen.HOME) }
+    var projects by remember { mutableStateOf(repository.listProjects()) }
+    var selected by remember { mutableStateOf<TrackStudioProject?>(null) }
+    var createDialog by remember { mutableStateOf(false) }
+    var projectName by remember { mutableStateOf("") }
+    var hasPermission by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
+    var cameraStatus by remember { mutableStateOf("Camera is ready") }
+    val cameraController = remember {
+        CameraPreviewDiagnosticController(context.applicationContext) { cameraStatus = it }
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        hasPermission = granted
+        cameraStatus = if (granted) "Permission granted — preparing camera" else "Camera permission is required"
+    }
+
+    BackHandler(screen != Screen.HOME) {
+        screen = when (screen) {
+            Screen.CAMERA -> Screen.DETAIL
+            Screen.DETAIL -> Screen.PROJECTS
+            else -> Screen.HOME
+        }
+    }
+
+    val scheme = if (dark) darkColorScheme(
+        primary = Color(0xFF64D8C5), secondary = Color(0xFF9CB9FF),
+        background = Color(0xFF101418), surface = Color(0xFF171E24),
+        surfaceVariant = Color(0xFF253039)
+    ) else lightColorScheme(
+        primary = Color(0xFF087E75), secondary = Color(0xFF4569A8),
+        background = Color(0xFFF5F7F8), surface = Color.White,
+        surfaceVariant = Color(0xFFE9EFF0)
+    )
+
+    MaterialTheme(colorScheme = scheme) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            when (screen) {
+                Screen.HOME -> HomeScreen(
+                    { projectName = ""; createDialog = true },
+                    { projects = repository.listProjects(); screen = Screen.PROJECTS },
+                    { screen = Screen.CAMERA_SETTINGS },
+                    { screen = Screen.APP_SETTINGS }
+                )
+                Screen.PROJECTS -> ProjectsScreen(
+                    projects, { screen = Screen.HOME },
+                    { projects = repository.listProjects() },
+                    { selected = it; screen = Screen.DETAIL }
+                )
+                Screen.DETAIL -> {
+                    val p = selected
+                    if (p == null) screen = Screen.PROJECTS
+                    else ProjectDetailScreen(p) { screen = Screen.PROJECTS }
+                }
+                Screen.CAMERA -> {
+                    val p = selected
+                    if (p == null) screen = Screen.HOME
+                    else CameraScreen(p, hasPermission, cameraStatus, cameraController,
+                        { screen = Screen.DETAIL },
+                        { permissionLauncher.launch(Manifest.permission.CAMERA) })
+                }
+                Screen.CAMERA_SETTINGS -> CameraSettingsScreen { screen = Screen.HOME }
+                Screen.APP_SETTINGS -> AppSettingsScreen(themeMode, {
+                    themeMode = it
+                    prefs.edit().putString("theme_mode", it).apply()
+                }) { screen = Screen.HOME }
             }
+        }
+    }
+
+    if (createDialog) {
+        AlertDialog(
+            onDismissRequest = { createDialog = false },
+            title = { Text("New project") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Name this shoot. Its recordings and tracking data will stay organised in this project.")
+                    OutlinedTextField(
+                        value = projectName, onValueChange = { projectName = it },
+                        label = { Text("Project name") }, placeholder = { Text("e.g. Car Tracking Test") },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(enabled = projectName.isNotBlank(), onClick = {
+                    selected = repository.createProject(projectName)
+                    projects = repository.listProjects()
+                    createDialog = false
+                    screen = Screen.CAMERA
+                    if (!hasPermission) permissionLauncher.launch(Manifest.permission.CAMERA)
+                }) { Text("Create and open camera") }
+            },
+            dismissButton = { TextButton(onClick = { createDialog = false }) { Text("Cancel") } }
+        )
+    }
+}
+
+@Composable
+private fun HomeScreen(
+    openCamera: () -> Unit, openProjects: () -> Unit,
+    openCameraSettings: () -> Unit, openAppSettings: () -> Unit
+) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("TrackStudio AR", fontSize = 27.sp, fontWeight = FontWeight.Bold)
+                Text("LIVE CAMERA TRACKING", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, letterSpacing = 1.5.sp)
+            }
+            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) {
+                Text("AR", Modifier.padding(horizontal = 14.dp, vertical = 10.dp), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            }
+        }
+        Card(
+            Modifier.fillMaxWidth().clickable(onClick = openCamera),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary)
+        ) {
+            Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text("◉", color = Color.White, fontSize = 30.sp)
+                Text("Open Camera", color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.SemiBold)
+                Text("Create a project and start a live tracking session.", color = Color.White.copy(alpha = .88f), fontSize = 14.sp)
+                Text("START SHOOT  →", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            }
+        }
+        Text("WORKSPACE", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            HomeTile("Projects", "Your shoots and tracking data", "▣", Modifier.weight(1f), openProjects)
+            HomeTile("Camera settings", "Device camera capabilities", "◎", Modifier.weight(1f), openCameraSettings)
+        }
+        HomeTile("App settings", "Appearance and preferences", "⚙", Modifier.fillMaxWidth(), openAppSettings)
+        Text("Track. Capture. Organise.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun HomeTile(title: String, description: String, symbol: String, modifier: Modifier, onClick: () -> Unit) {
+    Card(modifier.clickable(onClick = onClick), shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(symbol, color = MaterialTheme.colorScheme.primary, fontSize = 24.sp)
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, lineHeight = 16.sp)
         }
     }
 }
 
-/**
- * Temporary diagnostic screen. The only active device feature is a Camera2
- * preview stream; the production capture pipeline is intentionally not started.
- */
 @Composable
-private fun CameraCompatibilityScreen() {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var hasCameraPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-                PackageManager.PERMISSION_GRANTED
-        )
+private fun PageHeader(title: String, subtitle: String, back: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("‹", Modifier.clickable(onClick = back).padding(end = 16.dp), fontSize = 34.sp, color = MaterialTheme.colorScheme.primary)
+        Column {
+            Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        }
     }
-    var status by remember { mutableStateOf("Waiting for camera permission") }
-    val controller = remember {
-        CameraPreviewDiagnosticController(context.applicationContext) { status = it }
-    }
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasCameraPermission = granted
-        status = if (granted) "Permission granted — preparing preview" else "Camera permission denied"
-    }
+}
 
-    DisposableEffect(lifecycleOwner, hasCameraPermission, controller) {
+@Composable
+private fun ProjectsScreen(
+    projects: List<TrackStudioProject>, back: () -> Unit,
+    refresh: () -> Unit, openProject: (TrackStudioProject) -> Unit
+) {
+    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        PageHeader("Projects", "Your live tracking shoots", back)
+        if (projects.isEmpty()) {
+            Text("No projects yet", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+            Text("Choose Open Camera on the home screen to create your first project.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                projects.forEach { p ->
+                    Card(Modifier.fillMaxWidth().clickable { openProject(p) },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("▣", Modifier.padding(end = 12.dp), color = MaterialTheme.colorScheme.primary, fontSize = 22.sp)
+                            Column(Modifier.weight(1f)) {
+                                Text(p.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${p.recordingCount} recordings · ${dateText(p.createdAt)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text("›", color = MaterialTheme.colorScheme.primary, fontSize = 24.sp)
+                        }
+                    }
+                }
+            }
+        }
+        OutlinedButton(onClick = refresh, Modifier.fillMaxWidth()) { Text("Refresh projects") }
+    }
+}
+
+@Composable
+private fun ProjectDetailScreen(project: TrackStudioProject, back: () -> Unit) {
+    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        PageHeader("Project", "Project workspace", back)
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(project.name, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                Text("Created ${dateText(project.createdAt)}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                Divider()
+                Text("${project.recordingCount} recordings", fontWeight = FontWeight.SemiBold)
+                Text("One project can contain multiple recordings. Each recording will have its own footage, tracking data and sensor files.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+            }
+        }
+        Text("RECORDINGS", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.SemiBold)
+        Text("No recordings yet", fontWeight = FontWeight.Medium)
+        Text("Saved recordings will appear here inside this project.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        Spacer(Modifier.weight(1f))
+        FilledTonalButton(onClick = back, Modifier.fillMaxWidth()) { Text("Back to projects") }
+    }
+}
+
+@Composable
+private fun CameraScreen(
+    project: TrackStudioProject, hasPermission: Boolean, status: String,
+    controller: CameraPreviewDiagnosticController, back: () -> Unit, requestPermission: () -> Unit
+) {
+    val lifecycle = LocalLifecycleOwner.current
+    DisposableEffect(lifecycle, hasPermission, controller) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> if (hasCameraPermission) controller.start()
+                Lifecycle.Event.ON_RESUME -> if (hasPermission) controller.start()
                 Lifecycle.Event.ON_PAUSE -> controller.stop()
                 else -> Unit
             }
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
-            hasCameraPermission
-        ) {
-            controller.start()
-        }
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            controller.stop()
-        }
+        lifecycle.lifecycle.addObserver(observer)
+        if (hasPermission && lifecycle.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) controller.start()
+        onDispose { lifecycle.lifecycle.removeObserver(observer); controller.stop() }
     }
-
-    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF101318)) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text("TRACKSTUDIO / CAMERA DIAGNOSTIC", color = Color.White, fontSize = 18.sp)
-            Text(
-                "Stage 1: Camera2 preview only",
-                color = Color(0xFF9AA7B5),
-                fontSize = 12.sp
-            )
-            Text(
-                "OpenCV, JNI, IMU, ImageReader processing and recording are disabled for this test.",
-                color = Color(0xFF9AA7B5),
-                fontSize = 12.sp
-            )
-            if (hasCameraPermission) {
-                AndroidView(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .background(Color.Black),
-                    factory = { viewContext ->
-                        TextureView(viewContext).also(controller::attach)
-                    },
-                    update = controller::attach
-                )
-            } else {
-                Box(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Button(onClick = {
-                        permissionLauncher.launch(Manifest.permission.CAMERA)
-                    }) {
-                        Text("Grant camera permission")
-                    }
-                }
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        if (hasPermission) {
+            AndroidView(Modifier.fillMaxSize(),
+                factory = { TextureView(it).also(controller::attach) },
+                update = controller::attach)
+        } else {
+            Column(Modifier.align(Alignment.Center).padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Camera permission needed", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                Text("Allow camera access to open the viewfinder.", color = Color.LightGray)
+                Button(onClick = requestPermission) { Text("Allow camera") }
             }
-            Text(status, color = Color(0xFF73D6A5), fontSize = 14.sp)
-            Text(
-                "Please keep this screen open for 30 seconds after the preview appears.",
-                color = Color(0xFFB9C5D2),
-                fontSize = 12.sp
-            )
+        }
+        Row(Modifier.align(Alignment.TopCenter).fillMaxWidth()
+            .background(Color.Black.copy(alpha = .58f)).padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text("‹", Modifier.clickable(onClick = back).padding(end = 14.dp), color = Color.White, fontSize = 32.sp)
+            Column(Modifier.weight(1f)) {
+                Text(project.name, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("TRACKSTUDIO AR · LIVE VIEW", color = Color.White.copy(alpha = .72f), fontSize = 9.sp, letterSpacing = 1.sp)
+            }
+            Surface(shape = CircleShape, color = Color.White.copy(alpha = .16f)) {
+                Text("PREVIEW", Modifier.padding(horizontal = 10.dp, vertical = 6.dp), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+            .background(Color.Black.copy(alpha = .68f)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(status, color = Color.White, fontSize = 12.sp)
+            Text("Full-screen camera preview. Recording and live anchor-point tracking are being integrated next.", color = Color.White.copy(alpha = .72f), fontSize = 11.sp, lineHeight = 15.sp)
         }
     }
 }
+
+private data class CameraCapabilities(val sizes: List<String>, val fps: List<String>)
+
+private fun cameraCapabilities(context: Context): CameraCapabilities = try {
+    val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+    val id = manager.cameraIdList.firstOrNull {
+        manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+    } ?: manager.cameraIdList.firstOrNull()
+    if (id == null) CameraCapabilities(emptyList(), emptyList()) else {
+        val c = manager.getCameraCharacteristics(id)
+        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val sizes = map?.getOutputSizes(MediaRecorder::class.java)?.sortedByDescending { it.width.toLong() * it.height }
+            ?.map { "${it.width} × ${it.height}" }?.distinct()?.take(10) ?: emptyList()
+        val fps = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            ?.map { "${it.lower}–${it.upper} FPS" }?.distinct()?.take(8) ?: emptyList()
+        CameraCapabilities(sizes, fps)
+    }
+} catch (_: Exception) { CameraCapabilities(emptyList(), emptyList()) }
+
+@Composable
+private fun CameraSettingsScreen(back: () -> Unit) {
+    val context = LocalContext.current
+    val capabilities = remember { cameraCapabilities(context) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+        PageHeader("Camera settings", "Capabilities reported by this device", back)
+        Text("RECORDING RESOLUTIONS", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.SemiBold)
+        if (capabilities.sizes.isEmpty()) Text("Recording sizes are not reported by Camera2.")
+        else capabilities.sizes.forEach { CapabilityRow(it) }
+        Text("FRAME RATE RANGES", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.SemiBold)
+        if (capabilities.fps.isEmpty()) Text("Frame-rate ranges are not reported.")
+        else capabilities.fps.forEach { CapabilityRow(it) }
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Text("The capture engine will select from the device-supported profiles. The verified camera preview configuration is intentionally unchanged in this build.",
+                Modifier.padding(14.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun CapabilityRow(value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.width(10.dp))
+        Text(value, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun AppSettingsScreen(themeMode: String, setTheme: (String) -> Unit, back: () -> Unit) {
+    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        PageHeader("App settings", "Personalise TrackStudio AR", back)
+        Text("APPEARANCE", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.SemiBold)
+        Text("Choose your preferred theme.")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("light" to "Light", "dark" to "Dark", "system" to "System").forEach { (value, label) ->
+                if (themeMode == value) Button(onClick = { setTheme(value) }, Modifier.weight(1f)) { Text(label) }
+                else OutlinedButton(onClick = { setTheme(value) }, Modifier.weight(1f)) { Text(label) }
+            }
+        }
+        Divider()
+        Text("PERFORMANCE", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.SemiBold)
+        Text("Camera analysis will use bounded frame queues and background workers to keep the viewfinder responsive.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+    }
+}
+
+private fun dateText(time: Long): String =
+    SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(time))

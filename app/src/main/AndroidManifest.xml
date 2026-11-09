@@ -5,7 +5,7 @@
     <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
     <application
         android:allowBackup="false"
-        android:label="TrackStudio AR Tracker"
+        android:label="TrackStudio AR"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
