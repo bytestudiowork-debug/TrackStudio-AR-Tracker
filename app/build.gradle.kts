@@ -12,8 +12,8 @@ android {
         applicationId = "com.trackstudio.artracker"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "0.7.2-permission-fix"
+        versionCode = 10
+        versionName = "0.7.3-camera-recovery"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
         externalNativeBuild { cmake { cppFlags += listOf("-std=c++17", "-O3", "-fno-exceptions", "-fno-rtti") } }
     }
