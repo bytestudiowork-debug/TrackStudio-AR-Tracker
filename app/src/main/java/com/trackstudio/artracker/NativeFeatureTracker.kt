@@ -19,9 +19,10 @@ import kotlin.math.roundToLong
  */
 internal object NativeFeatureTracker {
     private const val MAX_CORNERS = 180
-    // Keep native OpenCV off during camera bring-up on older Android devices.
-    // Re-enable only after the camera pipeline is verified on target hardware.
-    private const val ENABLE_OPENCV_TRACKING = false
+    // The camera pipeline has now been verified on the target Android 8.1 device.
+    // Use OpenCV Shi-Tomasi corners + pyramidal Lucas-Kanade flow for real diagnostics.
+    // Failures remain isolated so a missing/incompatible OpenCV runtime cannot stop capture.
+    private const val ENABLE_OPENCV_TRACKING = true
     private var previousGray: Mat? = null
     private var initialized = false
     private var unavailable = false

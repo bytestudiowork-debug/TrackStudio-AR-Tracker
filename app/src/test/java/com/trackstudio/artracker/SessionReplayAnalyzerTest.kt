@@ -93,6 +93,24 @@ class SessionReplayAnalyzerTest {
         assertTrue(report.validation.isValid)
     }
 
+    @Test fun replaysLegacyShortImuRowsAsGyroAndAccelerometerSamples() {
+        fun legacyImu(timestamp: Long, sensor: String): String =
+            row("IMU", timestamp, sensor).split(",").take(18).joinToString(",")
+        val report = SessionReplayAnalyzer.analyze(sequenceOf(
+            header,
+            row("FRAME", 1_000_000_000),
+            row("FRAME", 1_033_000_000),
+            legacyImu(1_001_000_000, "4"),
+            legacyImu(1_002_000_000, "1"),
+            legacyImu(1_011_000_000, "4"),
+            legacyImu(1_012_000_000, "1")
+        ))
+        assertTrue(report.validation.isValid)
+        assertEquals(2L, report.gyroStream.samples)
+        assertEquals(2L, report.accelerometerStream.samples)
+        assertEquals(0L, report.validation.malformedRows)
+    }
+
     @Test fun rejectsMixedCameraTimestampDomains() {
         val report = SessionReplayAnalyzer.analyze(sequenceOf(
             header, row("FRAME", 1_000_000_000, clock = "REALTIME"),
