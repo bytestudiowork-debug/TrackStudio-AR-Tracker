@@ -23,6 +23,7 @@ import java.io.BufferedWriter
 import java.io.File
 import java.io.FileWriter
 import android.util.Size
+import android.util.Log
 import android.view.Surface
 import android.view.TextureView
 import androidx.core.content.ContextCompat
@@ -292,25 +293,50 @@ class CameraImuCaptureController(
         }
 
         try {
-            // Prefer the rear camera with the largest physical pixel array. Camera ID order is
-            // vendor-defined, so blindly taking the first rear camera can select a secondary lens.
-            val cameraId = cameraManager.cameraIdList.mapNotNull { id ->
-                val candidate = cameraManager.getCameraCharacteristics(id)
-                if (candidate.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_BACK) {
+            // Some older/vendor Camera2 HALs expose camera IDs that disappear or fail while
+            // their characteristics are queried. Inspect each ID independently and skip only
+            // the broken entry instead of aborting enumeration for the whole device.
+            val cameraIds = cameraManager.cameraIdList
+            val candidates = cameraIds.mapNotNull { id ->
+                try {
+                    val candidate = cameraManager.getCameraCharacteristics(id)
+                    val candidateMap = candidate.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    val previewSizes = candidateMap?.getOutputSizes(SurfaceTexture::class.java)
+                    val analysisSizes = candidateMap?.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)
+                    if (candidateMap == null || previewSizes.isNullOrEmpty() || analysisSizes.isNullOrEmpty()) {
+                        Log.w("TrackStudio", "Skipping camera $id: required preview/YUV stream is unavailable")
+                        null
+                    } else {
+                        val facing = candidate.get(CameraCharacteristics.LENS_FACING)
+                        val pixels = candidate.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+                        val area = pixels?.let { it.width.toLong() * it.height.toLong() } ?: 0L
+                        Triple(id, candidate, (facing == CameraCharacteristics.LENS_FACING_BACK) to area)
+                    }
+                } catch (cameraError: Exception) {
+                    Log.w("TrackStudio", "Skipping unavailable camera ID $id", cameraError)
                     null
-                } else {
-                    val pixels = candidate.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
-                    val area = pixels?.let { it.width.toLong() * it.height.toLong() } ?: 0L
-                    id to area
+                } catch (cameraError: LinkageError) {
+                    Log.w("TrackStudio", "Skipping camera ID $id due to unsupported Camera2 field", cameraError)
+                    null
                 }
-            }.maxByOrNull { it.second }?.first ?: cameraManager.cameraIdList.firstOrNull()
-
-            if (cameraId == null) {
-                publish("No camera is available")
-                return
             }
+            // Prefer a usable rear camera, then the largest sensor among cameras that expose
+            // both streams. Do not blindly fall back to an ID that failed capability checks.
+            val selected = candidates.maxWithOrNull(
+                compareBy<Triple<String, CameraCharacteristics, Pair<Boolean, Long>>> { it.third.first }
+                    .thenBy { it.third.second }
+            ) ?: throw IllegalStateException(
+                "No compatible Camera2 device. IDs reported: ${cameraIds.joinToString().ifBlank { "none" }}"
+            )
+            val cameraId = selected.first
+            val characteristics = selected.second
+            val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?: throw IllegalStateException("Selected camera $cameraId has no stream configuration")
+            val previewOutputs = map.getOutputSizes(SurfaceTexture::class.java)
+                ?: throw IllegalStateException("Selected camera $cameraId has no preview output sizes")
+            val analysisOutputs = map.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)
+                ?: throw IllegalStateException("Selected camera $cameraId has no YUV analysis output sizes")
 
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             activeCameraId = cameraId
             activeCameraCharacteristics = characteristics
             cameraTimestampSource = when (
@@ -321,14 +347,9 @@ class CameraImuCaptureController(
                 else -> "UNKNOWN"
             }
             enqueueSessionMetadataWrite()
-            val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            if (map == null) {
-                publish("Camera does not expose stream configuration")
-                return
-            }
 
-            val previewSize = choosePreviewSize(map.getOutputSizes(SurfaceTexture::class.java))
-            val analysisSize = chooseAnalysisSize(map.getOutputSizes(android.graphics.ImageFormat.YUV_420_888))
+            val previewSize = choosePreviewSize(previewOutputs)
+            val analysisSize = chooseAnalysisSize(analysisOutputs)
             view.surfaceTexture?.setDefaultBufferSize(previewSize.width, previewSize.height)
 
             imageReader = ImageReader.newInstance(
@@ -436,9 +457,17 @@ class CameraImuCaptureController(
                     recoverCameraFailure("Camera error: $error")
                 }
             }, cameraHandler)
-        } catch (_: SecurityException) {            publish("Camera permission is missing")
+        } catch (error: SecurityException) {
+            Log.e("TrackStudio", "Camera permission was lost during camera setup", error)
+            recoverCameraFailure("Camera permission is missing")
         } catch (error: Exception) {
-            publish("Camera setup failed: ${error.javaClass.simpleName}")
+            Log.e("TrackStudio", "Camera setup failed for ID ${activeCameraId ?: "unselected"}", error)
+            recoverCameraFailure(
+                "Camera setup failed: ${error.javaClass.simpleName}: ${error.message ?: "no details"}"
+            )
+        } catch (error: LinkageError) {
+            Log.e("TrackStudio", "Camera2 API field is unavailable on this device", error)
+            recoverCameraFailure("Camera2 compatibility error: ${error.message ?: error.javaClass.simpleName}")
         }
     }
 
