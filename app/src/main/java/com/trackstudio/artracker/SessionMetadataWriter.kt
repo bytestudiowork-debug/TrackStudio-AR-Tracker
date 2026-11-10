@@ -66,7 +66,7 @@ internal object SessionMetadataWriter {
         }
         root.put("calibrationReadiness", JSONObject()
             .put("cameraIntrinsicsAvailable", characteristics?.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION) != null)
-            .put("cameraDistortionAvailable", characteristics?.get(CameraCharacteristics.LENS_DISTORTION) != null)
+            .put("cameraDistortionAvailable", characteristics?.let { distortionCoefficients(it) != null } ?: false)
             .put("androidLensPoseAvailable", characteristics?.get(CameraCharacteristics.LENS_POSE_ROTATION) != null &&
                 characteristics.get(CameraCharacteristics.LENS_POSE_TRANSLATION) != null)
             .put("cameraImuExtrinsicsCalibrated", false)
@@ -121,10 +121,19 @@ internal object SessionMetadataWriter {
             } ?: JSONObject.NULL)
             .put("availableFocalLengthsMm", floatArrayJson(focalLengths))
             .put("intrinsicsFxFyCxCySkew", floatArrayJson(c.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)))
-            .put("distortionK1K2K3P1P2", floatArrayJson(c.get(CameraCharacteristics.LENS_DISTORTION)))
+            .put("distortionCoefficients", floatArrayJson(distortionCoefficients(c)))
+            .put("distortionModel", if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) "BROWN_CONRADY_5" else "LEGACY_RADIAL_6")
             .put("androidLensPoseRotation", floatArrayJson(c.get(CameraCharacteristics.LENS_POSE_ROTATION)))
             .put("androidLensPoseTranslationMeters", floatArrayJson(c.get(CameraCharacteristics.LENS_POSE_TRANSLATION)))
     }
+
+    // LENS_DISTORTION was added in Android 9 (API 28); API 27 uses the legacy key.
+    private fun distortionCoefficients(c: CameraCharacteristics): FloatArray? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            c.get(CameraCharacteristics.LENS_DISTORTION)
+        } else {
+            c.get(CameraCharacteristics.LENS_RADIAL_DISTORTION)
+        }
 
     private fun sensorJson(sensor: Sensor?): JSONObject {
         if (sensor == null) return JSONObject().put("available", false)
