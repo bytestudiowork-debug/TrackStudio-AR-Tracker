@@ -839,7 +839,16 @@ class CameraImuCaptureController(
     }
 
     private fun logCsvFields(vararg fields: Any?) {
-        logCsv(fields.joinToString(",") { it?.toString() ?: "" })
+        // Every row must match the 27-column header. Older IMU rows previously
+        // stopped at camera_timestamp_source, which made every IMU sample look
+        // malformed to the replay validator. Pad only trailing empty fields.
+        if (fields.size > SessionCsvValidator.EXPECTED_COLUMN_COUNT) {
+            Log.e("TrackStudio", "Refusing CSV row with ${fields.size} columns")
+            return
+        }
+        val normalized = fields.asList() +
+            List(SessionCsvValidator.EXPECTED_COLUMN_COUNT - fields.size) { null }
+        logCsv(normalized.joinToString(",") { it?.toString() ?: "" })
     }
 
     private fun logCsv(line: String) {
