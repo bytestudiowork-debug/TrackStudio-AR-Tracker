@@ -405,17 +405,29 @@ private fun CameraScreen(
     var torchOn by remember(project.id) { mutableStateOf(false) }
     val mainHandler = remember { Handler(context.mainLooper) }
     val lifecycle = LocalLifecycleOwner.current
-    DisposableEffect(lifecycle, hasPermission, controller) {
+    // Keep the lifecycle observer stable while the permission result updates Compose state.
+    // Recreating this effect on hasPermission changes can stop/restart camera workers during
+    // the permission hand-off on older Android devices.
+    val permissionGranted by rememberUpdatedState(hasPermission)
+    val activeProject by rememberUpdatedState(project)
+    DisposableEffect(lifecycle, controller) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> if (hasPermission) controller.start(project)
+                Lifecycle.Event.ON_RESUME -> if (permissionGranted) controller.start(activeProject)
                 Lifecycle.Event.ON_PAUSE -> controller.stop()
                 else -> Unit
             }
         }
         lifecycle.lifecycle.addObserver(observer)
-        if (hasPermission && lifecycle.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) controller.start(project)
-        onDispose { lifecycle.lifecycle.removeObserver(observer); controller.stop() }
+        onDispose {
+            lifecycle.lifecycle.removeObserver(observer)
+            controller.stop()
+        }
+    }
+    LaunchedEffect(hasPermission, project.id) {
+        if (hasPermission && lifecycle.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            controller.start(project)
+        }
     }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (hasPermission) {
