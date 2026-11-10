@@ -427,13 +427,13 @@ class CameraImuCaptureController(
                 override fun onDisconnected(camera: CameraDevice) {
                     camera.close()
                     cameraDevice = null
-                    publish("Camera disconnected")
+                    recoverCameraFailure("Camera disconnected")
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
                     camera.close()
                     cameraDevice = null
-                    publish("Camera error: $error")
+                    recoverCameraFailure("Camera error: $error")
                 }
             }, cameraHandler)
         } catch (_: SecurityException) {            publish("Camera permission is missing")
@@ -480,7 +480,7 @@ class CameraImuCaptureController(
                         session.close()
                         preview.release()
                         if (previewSurface === preview) previewSurface = null
-                        publish("Camera session configuration failed")
+                        recoverCameraFailure("Camera session configuration failed")
                     }
                 },
                 cameraHandler
@@ -749,6 +749,21 @@ class CameraImuCaptureController(
                 session.capture(request.build(), null, cameraHandler)
             } catch (error: Exception) { publish("Autofocus failed: ${error.message}") }
         }
+    }
+
+    /**
+     * A failed Camera2 open/session must release the capture workers and reset running.
+     * Otherwise a later project open sees running=true and silently skips camera startup.
+     */
+    private fun recoverCameraFailure(message: String) {
+        try {
+            stop()
+        } catch (_: Exception) {
+            running = false
+        } catch (_: LinkageError) {
+            running = false
+        }
+        publish(message)
     }
 
     private fun closeCamera() {

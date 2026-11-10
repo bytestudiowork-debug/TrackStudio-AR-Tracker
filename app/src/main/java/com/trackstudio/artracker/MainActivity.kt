@@ -444,6 +444,22 @@ private fun CameraScreen(
                 Button(onClick = requestPermission) { Text("Allow camera") }
             }
         }
+        if (hasPermission && status.isNotBlank()) {
+            Surface(
+                Modifier.align(Alignment.TopCenter).padding(top = 70.dp, start = 16.dp, end = 16.dp),
+                shape = RoundedCornerShape(18.dp),
+                color = Color.Black.copy(alpha = .62f)
+            ) {
+                Text(
+                    status,
+                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
         if (hasPermission) {
             Row(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 34.dp, vertical = 28.dp),
