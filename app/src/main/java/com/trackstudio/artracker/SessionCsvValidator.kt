@@ -53,11 +53,16 @@ internal object SessionCsvValidator {
             }
             if (!headerValid || line.isBlank()) return null
             total++
-            val fields = line.split(',')
-            if (fields.size != EXPECTED_COLUMN_COUNT) {
+            // Older capture builds omitted trailing empty CSV columns on IMU rows.
+            // Those columns carry no values, so pad them safely for the current schema.
+            // Never truncate extra columns: that would silently discard actual data.
+            val rawFields = line.split(',')
+            if (rawFields.size > EXPECTED_COLUMN_COUNT) {
                 malformed++
                 return null
             }
+            val fields = if (rawFields.size == EXPECTED_COLUMN_COUNT) rawFields
+                else rawFields + List(EXPECTED_COLUMN_COUNT - rawFields.size) { "" }
 
             // Validate the timestamp before sensor/type-specific checks so a row
             // with multiple defects is consistently classified as a bad timestamp.
