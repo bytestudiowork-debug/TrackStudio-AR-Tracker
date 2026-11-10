@@ -57,6 +57,28 @@ class SessionCsvValidatorTest {
         assertFalse(r.isValid)
     }
 
+    @Test fun acceptsLegacyImuRowsWithOmittedTrailingEmptyColumns() {
+        fun legacyImu(timestamp: Long, sensor: String): String {
+            val fields = row("IMU", timestamp, sensor).split(",").toMutableList()
+            fields[17] = "UNKNOWN"
+            return fields.take(18).joinToString(",")
+        }
+        val r = SessionCsvValidator.validate(sequenceOf(
+            header, legacyImu(100, "1"), legacyImu(110, "4")
+        ))
+        assertTrue(r.headerValid)
+        assertTrue(r.isValid)
+        assertEquals(2L, r.imuRows)
+        assertEquals(0L, r.malformedRows)
+    }
+
+    @Test fun rejectsRowsWithMoreColumnsThanTheSchema() {
+        val tooWide = row("IMU", 100, "4") + ",unexpected"
+        val r = SessionCsvValidator.validate(sequenceOf(header, tooWide))
+        assertEquals(1L, r.malformedRows)
+        assertFalse(r.isValid)
+    }
+
     @Test fun rejectsWrongHeader() {
         val r = SessionCsvValidator.validate(sequenceOf("wrong,header"))
         assertFalse(r.headerValid); assertFalse(r.isValid)
