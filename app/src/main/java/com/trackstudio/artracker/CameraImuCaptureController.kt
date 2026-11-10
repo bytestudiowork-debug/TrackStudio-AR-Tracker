@@ -409,7 +409,7 @@ class CameraImuCaptureController(
                                 }
                                 if (latestAccelDelta.valid) {
                                     val gravity = imuPreintegrator.gravityEstimate()
-                                    logCsvFields("ACCEL_DELTA", frameTimestamp, null, null, null, null, null, null, null, null, null, null, null, latestAccelDelta.intervalSeconds * 1000.0, latestAccelDelta.sampleCount, cameraTimestampSource, latestAccelDelta.velocityX, latestAccelDelta.velocityY, latestAccelDelta.velocityZ, latestAccelDelta.positionX, latestAccelDelta.positionY, latestAccelDelta.positionZ, gravity.x, gravity.y, gravity.z)
+                                    logCsvFields("ACCEL_DELTA", frameTimestamp, null, null, null, null, null, null, null, null, null, null, null, null, null, latestAccelDelta.intervalSeconds * 1000.0, latestAccelDelta.sampleCount, cameraTimestampSource, latestAccelDelta.velocityX, latestAccelDelta.velocityY, latestAccelDelta.velocityZ, latestAccelDelta.positionX, latestAccelDelta.positionY, latestAccelDelta.positionZ, gravity.x, gravity.y, gravity.z)
                                 }
                             } else {
                                 latestGyroDelta = ImuPreintegrator.Delta(false)
