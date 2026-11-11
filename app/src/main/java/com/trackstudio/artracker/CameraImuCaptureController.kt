@@ -23,11 +23,14 @@ import java.io.BufferedWriter
 import java.io.File
 import java.io.FileWriter
 import android.util.Size
+import android.util.Range
 import android.util.Log
 import android.view.Surface
 import android.view.TextureView
 import androidx.core.content.ContextCompat
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 
 data class CaptureStats(
@@ -101,6 +104,15 @@ class CameraImuCaptureController(
     private var sensorHandler: Handler? = null
     private var loggerThread: HandlerThread? = null
     private var loggerHandler: Handler? = null
+    private var analysisThread: HandlerThread? = null
+    private var analysisHandler: Handler? = null
+    private data class PendingAnalysisFrame(val timestampNs: Long, val packed: PackedLumaFrame)
+    private val pendingAnalysisFrame = AtomicReference<PendingAnalysisFrame?>(null)
+    private val analysisDrainScheduled = AtomicBoolean(false)
+    private val analysisDrainRunnable = Runnable { drainAnalysisFrame() }
+    private var selectedAnalysisSize: Size? = null
+    private var selectedAnalysisMinFrameDurationNs: Long = 0L
+    private var selectedAeFpsRange: Range<Int>? = null
     private var sessionLogFile: File? = null
     private var sessionWriter: BufferedWriter? = null
     private var cameraDevice: CameraDevice? = null
@@ -114,17 +126,17 @@ class CameraImuCaptureController(
     @Volatile private var torchEnabled = false
     @Volatile private var running = false
     @Volatile private var cameraTimestampSource = "UNKNOWN"
-    private var frameCount = 0L
+    @Volatile private var frameCount = 0L
     private var lastUiUpdateNs = 0L
-    private var latestFeatures = 0
-    private var latestTracked = 0
-    private var latestMotionX = 0.0
-    private var latestMotionY = 0.0
+    @Volatile private var latestFeatures = 0
+    @Volatile private var latestTracked = 0
+    @Volatile private var latestMotionX = 0.0
+    @Volatile private var latestMotionY = 0.0
     @Volatile private var lastGyro = floatArrayOf(0f, 0f, 0f)
     @Volatile private var lastAccel = floatArrayOf(0f, 0f, 0f)
     private var previousFrameTimestampNs = 0L
-    private var latestGyroDelta = ImuPreintegrator.Delta(false)
-    private var latestAccelDelta = ImuPreintegrator.AccelerationDelta(false)
+    @Volatile private var latestGyroDelta = ImuPreintegrator.Delta(false)
+    @Volatile private var latestAccelDelta = ImuPreintegrator.AccelerationDelta(false)
 
     fun attach(view: TextureView) {
         if (textureView === view) return
@@ -172,6 +184,9 @@ class CameraImuCaptureController(
         sessionStartedAtUnixMs = System.currentTimeMillis()
         activeCameraId = null
         activeCameraCharacteristics = null
+        selectedAnalysisSize = null
+        selectedAnalysisMinFrameDurationNs = 0L
+        selectedAeFpsRange = null
         latestGyroDelta = ImuPreintegrator.Delta(false)
         cameraThread = HandlerThread("AR-Camera-IMU").also { it.start() }
         cameraHandler = Handler(cameraThread!!.looper)
@@ -181,6 +196,10 @@ class CameraImuCaptureController(
         sensorHandler = Handler(sensorThread!!.looper)
         loggerThread = HandlerThread("AR-Session-Logger").also { it.start() }
         loggerHandler = Handler(loggerThread!!.looper)
+        analysisThread = HandlerThread("AR-Image-Analysis").also { it.start() }
+        analysisHandler = Handler(analysisThread!!.looper)
+        pendingAnalysisFrame.set(null)
+        analysisDrainScheduled.set(false)
         val logDir = File(project.directory, "Tracking Data/Sessions").apply { mkdirs() }
         val sessionStem = "capture-$sessionStartedAtUnixMs"
         sessionLogFile = File(logDir, "$sessionStem.csv")
@@ -227,9 +246,6 @@ class CameraImuCaptureController(
     fun stop() {
         if (!running) return
         running = false
-        NativeFeatureTracker.reset()
-        imuPreintegrator.reset()
-        previousFrameTimestampNs = 0L
         sensorManager.unregisterListener(this)
         val sensorWorker = sensorThread
         sensorWorker?.quitSafely()
@@ -243,6 +259,18 @@ class CameraImuCaptureController(
         if (cameraWorker != null && Thread.currentThread() !== cameraWorker) cameraWorker.join()
         cameraThread = null
         cameraHandler = null
+
+        // ImageReader callbacks have stopped; discard any frame not yet picked up for analysis.
+        pendingAnalysisFrame.set(null)
+        val analysisWorker = analysisThread
+        analysisWorker?.quitSafely()
+        if (analysisWorker != null && Thread.currentThread() !== analysisWorker) analysisWorker.join()
+        analysisThread = null
+        analysisHandler = null
+        analysisDrainScheduled.set(false)
+        NativeFeatureTracker.reset()
+        imuPreintegrator.reset()
+        previousFrameTimestampNs = 0L
 
         // All camera callbacks have drained before the archive is finalized.
         frameArchiveSnapshot = frameArchiveWriter?.finish()
@@ -349,7 +377,8 @@ class CameraImuCaptureController(
             enqueueSessionMetadataWrite()
 
             val previewSize = choosePreviewSize(previewOutputs)
-            val analysisSize = chooseAnalysisSize(analysisOutputs)
+            val analysisSize = chooseAnalysisSize(analysisOutputs, map)
+            enqueueSessionMetadataWrite()
             view.surfaceTexture?.setDefaultBufferSize(previewSize.width, previewSize.height)
 
             imageReader = ImageReader.newInstance(
@@ -393,36 +422,18 @@ class CameraImuCaptureController(
                             frameArchiveWriter?.offer(
                                 frameTimestamp, packed.width, packed.height, packed.pixels
                             )
-                            val result = NativeFeatureTracker.processFrame(
-                                packed.pixels, packed.width, packed.height, packed.width, 1
-                            )
-                            latestFeatures = result.getOrElse(0) { 0L }.toInt()
-                            latestTracked = result.getOrElse(1) { 0L }.toInt()
-                            latestMotionX = result.getOrElse(2) { 0L } / 1000.0
-                            latestMotionY = result.getOrElse(3) { 0L } / 1000.0
-
-                            if (cameraTimestampSource == "REALTIME" && previousFrameTimestampNs > 0L) {
-                                latestGyroDelta = imuPreintegrator.integrate(previousFrameTimestampNs, frameTimestamp)
-                                latestAccelDelta = imuPreintegrator.integrateAcceleration(previousFrameTimestampNs, frameTimestamp)
-                                if (latestGyroDelta.valid) {
-                                    logCsvFields("IMU_DELTA", frameTimestamp, null, null, null, null, null, null, null, null, null, null, latestGyroDelta.rotationXRad, latestGyroDelta.rotationYRad, latestGyroDelta.rotationZRad, latestGyroDelta.intervalSeconds * 1000.0, latestGyroDelta.sampleCount, cameraTimestampSource)
-                                }
-                                if (latestAccelDelta.valid) {
-                                    val gravity = imuPreintegrator.gravityEstimate()
-                                    logCsvFields("ACCEL_DELTA", frameTimestamp, null, null, null, null, null, null, null, null, null, null, null, null, null, latestAccelDelta.intervalSeconds * 1000.0, latestAccelDelta.sampleCount, cameraTimestampSource, latestAccelDelta.velocityX, latestAccelDelta.velocityY, latestAccelDelta.velocityZ, latestAccelDelta.positionX, latestAccelDelta.positionY, latestAccelDelta.positionZ, gravity.x, gravity.y, gravity.z)
-                                }
-                            } else {
-                                latestGyroDelta = ImuPreintegrator.Delta(false)
-                                latestAccelDelta = ImuPreintegrator.AccelerationDelta(false)
-                            }
-                            previousFrameTimestampNs = frameTimestamp
-
+                            // Keep one CSV FRAME row for every captured image. Feature processing
+                            // runs asynchronously and may intentionally skip intermediate frames.
                             val gravity = imuPreintegrator.gravityEstimate()
-                            logCsvFields("FRAME", frameTimestamp, packed.width, packed.height, latestFeatures, latestTracked, latestMotionX, latestMotionY, null, null, null, null, null, null, null, null, null, cameraTimestampSource, null, null, null, null, null, null, gravity.x.takeIf { gravity.valid }, gravity.y.takeIf { gravity.valid }, gravity.z.takeIf { gravity.valid })
-                            publishThrottled(
-                                if (cameraTimestampSource == "REALTIME") "Camera + IMU timing active"
-                                else "Camera active — IMU fusion unavailable (unknown timestamp source)"
+                            logCsvFields(
+                                "FRAME", frameTimestamp, packed.width, packed.height,
+                                null, null, null, null, null, null, null, null, null, null, null,
+                                null, null, cameraTimestampSource, null, null, null, null, null, null,
+                                gravity.x.takeIf { gravity.valid },
+                                gravity.y.takeIf { gravity.valid },
+                                gravity.z.takeIf { gravity.valid }
                             )
+                            enqueueAnalysisFrame(frameTimestamp, packed)
                         }
                     } catch (_: RuntimeException) {
                         // Drop malformed or stale frames without terminating the camera callback thread.
@@ -471,6 +482,64 @@ class CameraImuCaptureController(
         }
     }
 
+    private fun enqueueAnalysisFrame(timestampNs: Long, packed: PackedLumaFrame) {
+        // Keep only the newest pending frame. A slow feature tracker must never block Camera2
+        // or build an unbounded queue that increases image-to-IMU latency.
+        pendingAnalysisFrame.set(PendingAnalysisFrame(timestampNs, packed))
+        val handler = analysisHandler ?: return
+        if (analysisDrainScheduled.compareAndSet(false, true) && !handler.post(analysisDrainRunnable)) {
+            analysisDrainScheduled.set(false)
+        }
+    }
+
+    private fun drainAnalysisFrame() {
+        try {
+            val frame = pendingAnalysisFrame.getAndSet(null)
+            if (frame != null && running) processAnalysisFrame(frame)
+        } finally {
+            analysisDrainScheduled.set(false)
+            val handler = analysisHandler
+            if (pendingAnalysisFrame.get() != null && handler != null &&
+                analysisDrainScheduled.compareAndSet(false, true) && !handler.post(analysisDrainRunnable)
+            ) {
+                analysisDrainScheduled.set(false)
+            }
+        }
+    }
+
+    private fun processAnalysisFrame(frame: PendingAnalysisFrame) {
+        val frameTimestamp = frame.timestampNs
+        val packed = frame.packed
+        val result = NativeFeatureTracker.processFrame(
+            packed.pixels, packed.width, packed.height, packed.width, 1
+        )
+        latestFeatures = result.getOrElse(0) { 0L }.toInt()
+        latestTracked = result.getOrElse(1) { 0L }.toInt()
+        latestMotionX = result.getOrElse(2) { 0L } / 1000.0
+        latestMotionY = result.getOrElse(3) { 0L } / 1000.0
+
+        if (cameraTimestampSource == "REALTIME" && previousFrameTimestampNs > 0L) {
+            latestGyroDelta = imuPreintegrator.integrate(previousFrameTimestampNs, frameTimestamp)
+            latestAccelDelta = imuPreintegrator.integrateAcceleration(previousFrameTimestampNs, frameTimestamp)
+            if (latestGyroDelta.valid) {
+                logCsvFields("IMU_DELTA", frameTimestamp, null, null, null, null, null, null, null, null, null, null, latestGyroDelta.rotationXRad, latestGyroDelta.rotationYRad, latestGyroDelta.rotationZRad, latestGyroDelta.intervalSeconds * 1000.0, latestGyroDelta.sampleCount, cameraTimestampSource)
+            }
+            if (latestAccelDelta.valid) {
+                val gravity = imuPreintegrator.gravityEstimate()
+                logCsvFields("ACCEL_DELTA", frameTimestamp, null, null, null, null, null, null, null, null, null, null, null, null, null, latestAccelDelta.intervalSeconds * 1000.0, latestAccelDelta.sampleCount, cameraTimestampSource, latestAccelDelta.velocityX, latestAccelDelta.velocityY, latestAccelDelta.velocityZ, latestAccelDelta.positionX, latestAccelDelta.positionY, latestAccelDelta.positionZ, gravity.x, gravity.y, gravity.z)
+            }
+        } else {
+            latestGyroDelta = ImuPreintegrator.Delta(false)
+            latestAccelDelta = ImuPreintegrator.AccelerationDelta(false)
+        }
+        previousFrameTimestampNs = frameTimestamp
+
+        publishThrottled(
+            if (cameraTimestampSource == "REALTIME") "Camera + IMU timing active"
+            else "Camera active — IMU fusion unavailable (unknown timestamp source)"
+        )
+    }
+
     private fun createSession(view: TextureView) {
         val camera = cameraDevice ?: return
         val texture = view.surfaceTexture ?: return
@@ -496,7 +565,7 @@ class CameraImuCaptureController(
                                 set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                                activeCameraCharacteristics?.let { applyImageQualitySettings(this, it) }
+                                activeCameraCharacteristics?.let { applyTrackingCaptureSettings(this, it) }
                             }.build()
                             session.setRepeatingRequest(request, null, cameraHandler)
                             publish("Camera + IMU capture running")
@@ -706,7 +775,7 @@ class CameraImuCaptureController(
                             addTarget(reader.surface)
                             set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                             set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                            activeCameraCharacteristics?.let { applyImageQualitySettings(this, it) }
+                            activeCameraCharacteristics?.let { applyTrackingCaptureSettings(this, it) }
                             if (torchEnabled) set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
                         }.build()
                         session.setRepeatingRequest(request, null, cameraHandler)
@@ -743,7 +812,8 @@ class CameraImuCaptureController(
                     } else addTarget(reader.surface)
                     set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                     set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                    characteristics.let { applyImageQualitySettings(this, it) }
+                    if (recording) characteristics.let { applyImageQualitySettings(this, it) }
+                    else applyTrackingCaptureSettings(this, it)
                     set(CaptureRequest.FLASH_MODE, if (torchEnabled) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
                 }
                 session.setRepeatingRequest(builder.build(), null, cameraHandler)
@@ -772,7 +842,8 @@ class CameraImuCaptureController(
                     } else imageReader?.surface?.let(::addTarget)
                     set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
-                    activeCameraCharacteristics?.let { applyImageQualitySettings(this, it) }
+                    if (recording) activeCameraCharacteristics?.let { applyImageQualitySettings(this, it) }
+                    else activeCameraCharacteristics?.let { applyTrackingCaptureSettings(this, it) }
                     set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
                 }
                 session.capture(request.build(), null, cameraHandler)
@@ -936,7 +1007,11 @@ class CameraImuCaptureController(
             frameArchiveFile = frameArchiveFile,
             frameArchiveSnapshot = frameArchiveSnapshot,
             frameArchiveRecording = frameArchiveWriter != null,
-            frameArchiveStartError = frameArchiveStartError
+            frameArchiveStartError = frameArchiveStartError,
+            requestedAeFpsRange = selectedAeFpsRange?.let { it.lower.toString() + "-" + it.upper },
+            analysisWidth = selectedAnalysisSize?.width,
+            analysisHeight = selectedAnalysisSize?.height,
+            analysisMinFrameDurationNs = selectedAnalysisMinFrameDurationNs
         )
         loggerHandler?.post {
             try {
@@ -952,6 +1027,69 @@ class CameraImuCaptureController(
     private fun vector(x: Double, y: Double, z: Double): String =
         String.format(Locale.US, "%.3f, %.3f, %.3f", x, y, z)
 
+
+    /**
+     * Prefer low-latency ISP modes for tracking. High-quality edge/noise processing is
+     * appropriate for saved video, but adds work to every analysis frame on legacy HALs.
+     */
+    private fun applyTrackingCaptureSettings(
+        builder: CaptureRequest.Builder,
+        characteristics: CameraCharacteristics
+    ) {
+        val requestKeys = characteristics.availableCaptureRequestKeys ?: emptyList()
+        fun supports(key: CaptureRequest.Key<*>) = requestKeys.contains(key)
+
+        if (supports(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE)) {
+            selectedAeFpsRange?.let { builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+        }
+        if (supports(CaptureRequest.EDGE_MODE)) {
+            val modes = characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
+            val mode = when {
+                modes?.contains(CaptureRequest.EDGE_MODE_FAST) == true -> CaptureRequest.EDGE_MODE_FAST
+                modes?.contains(CaptureRequest.EDGE_MODE_OFF) == true -> CaptureRequest.EDGE_MODE_OFF
+                else -> null
+            }
+            if (mode != null) builder.set(CaptureRequest.EDGE_MODE, mode)
+        }
+        if (supports(CaptureRequest.NOISE_REDUCTION_MODE)) {
+            val modes = characteristics.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
+            val mode = when {
+                modes?.contains(CaptureRequest.NOISE_REDUCTION_MODE_FAST) == true -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                modes?.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF) == true -> CaptureRequest.NOISE_REDUCTION_MODE_OFF
+                else -> null
+            }
+            if (mode != null) builder.set(CaptureRequest.NOISE_REDUCTION_MODE, mode)
+        }
+        if (supports(CaptureRequest.SHADING_MODE)) {
+            val modes = characteristics.get(CameraCharacteristics.SHADING_AVAILABLE_MODES)
+            val mode = when {
+                modes?.contains(CaptureRequest.SHADING_MODE_FAST) == true -> CaptureRequest.SHADING_MODE_FAST
+                modes?.contains(CaptureRequest.SHADING_MODE_OFF) == true -> CaptureRequest.SHADING_MODE_OFF
+                else -> null
+            }
+            if (mode != null) builder.set(CaptureRequest.SHADING_MODE, mode)
+        }
+        if (supports(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE)) {
+            val modes = characteristics.get(CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES)
+            val mode = when {
+                modes?.contains(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_FAST) == true ->
+                    CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_FAST
+                modes?.contains(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_OFF) == true ->
+                    CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_OFF
+                else -> null
+            }
+            if (mode != null) builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, mode)
+        }
+        if (supports(CaptureRequest.HOT_PIXEL_MODE)) {
+            val modes = characteristics.get(CameraCharacteristics.HOT_PIXEL_AVAILABLE_HOT_PIXEL_MODES)
+            val mode = when {
+                modes?.contains(CaptureRequest.HOT_PIXEL_MODE_FAST) == true -> CaptureRequest.HOT_PIXEL_MODE_FAST
+                modes?.contains(CaptureRequest.HOT_PIXEL_MODE_OFF) == true -> CaptureRequest.HOT_PIXEL_MODE_OFF
+                else -> null
+            }
+            if (mode != null) builder.set(CaptureRequest.HOT_PIXEL_MODE, mode)
+        }
+    }
 
     /**
      * Ask Camera2 for neutral, high-quality processing where the device advertises support.
@@ -1007,9 +1145,8 @@ class CameraImuCaptureController(
     }
 
     private fun choosePreviewSize(sizes: Array<Size>): Size {
-        // Use a full-HD-class preview when the device exposes one. The previous scoring
-        // function actively preferred 1280x720 even when 1920x1080 was available.
-        val bounded = sizes.filter { it.width <= 1920 && it.height <= 1080 }
+        // Keep the display stream at 720p or below to reduce bandwidth on legacy Camera2 HALs.
+        val bounded = sizes.filter { it.width <= 1280 && it.height <= 720 }
         val matchingAspect = bounded.filter {
             abs((it.width.toFloat() / it.height) - (16f / 9f)) <= 0.04f
         }
@@ -1018,8 +1155,35 @@ class CameraImuCaptureController(
         } ?: sizes.maxByOrNull { it.width.toLong() * it.height } ?: Size(1280, 720)
     }
 
-    private fun chooseAnalysisSize(sizes: Array<Size>): Size {
-        return sizes.minByOrNull { abs(it.width - 640) + abs(it.height - 480) } ?: Size(640, 480)
+    private fun chooseAnalysisSize(
+        sizes: Array<Size>,
+        streamMap: android.hardware.camera2.params.StreamConfigurationMap
+    ): Size {
+        val candidates = sizes.map { size ->
+            val duration = try {
+                streamMap.getOutputMinFrameDuration(android.graphics.ImageFormat.YUV_420_888, size)
+            } catch (_: Exception) {
+                0L
+            }
+            CameraStreamCandidate(size.width, size.height, duration)
+        }
+        val selected = CameraCaptureProfileSelector.chooseAnalysisStream(candidates)
+            ?: throw IllegalStateException("No usable YUV analysis stream")
+        selectedAnalysisSize = Size(selected.width, selected.height)
+        selectedAnalysisMinFrameDurationNs = selected.minFrameDurationNs
+        selectedAeFpsRange = CameraCaptureProfileSelector.chooseFpsRange(
+            activeCameraCharacteristics
+                ?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                ?.map { CameraFpsRangeCandidate(it.lower, it.upper) }
+                ?: emptyList()
+        )?.let { Range(it.lower, it.upper) }
+        Log.i(
+            "TrackStudio",
+            "Selected analysis stream " + selected.width + "x" + selected.height +
+                ", minimum frame duration ns=" + selected.minFrameDurationNs +
+                ", AE FPS=" + (selectedAeFpsRange?.toString() ?: "device default")
+        )
+        return Size(selected.width, selected.height)
     }
 
     override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
