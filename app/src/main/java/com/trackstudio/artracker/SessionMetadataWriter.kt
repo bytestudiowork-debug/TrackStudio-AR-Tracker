@@ -31,7 +31,11 @@ internal object SessionMetadataWriter {
         frameArchiveFile: File?,
         frameArchiveSnapshot: BasaltFrameArchiveWriter.Snapshot?,
         frameArchiveRecording: Boolean,
-        frameArchiveStartError: String?
+        frameArchiveStartError: String?,
+        requestedAeFpsRange: String? = null,
+        analysisWidth: Int? = null,
+        analysisHeight: Int? = null,
+        analysisMinFrameDurationNs: Long? = null
     ): JSONObject {
         val root = JSONObject()
             .put("schemaVersion", 3)
@@ -73,6 +77,12 @@ internal object SessionMetadataWriter {
             .put("imuBiasCalibrated", false)
             .put("worldGravityCompensationImplemented", false)
             .put("note", "Camera2 metadata is a calibration input, not a complete camera-IMU calibration. Run a dedicated synchronized calibration before metric VIO."))
+        root.put("captureProfile", JSONObject()
+            .put("analysisWidth", analysisWidth ?: JSONObject.NULL)
+            .put("analysisHeight", analysisHeight ?: JSONObject.NULL)
+            .put("analysisMinFrameDurationNs", analysisMinFrameDurationNs ?: JSONObject.NULL)
+            .put("requestedAeFpsRange", requestedAeFpsRange ?: JSONObject.NULL)
+            .put("note", "The requested profile is a camera capability choice, not a guarantee of achieved frame rate."))
         return root
     }
 
